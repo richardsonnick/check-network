@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"encoding/xml"
 	"flag"
 	"fmt"
@@ -11,58 +12,59 @@ import (
 )
 
 type NmapRun struct {
-	XMLName xml.Name `xml:"nmaprun"`
-	Hosts   []Host   `xml:"host"`
+	XMLName xml.Name `xml:"nmaprun" json:"-"`
+	Hosts   []Host   `xml:"host" json:"hosts"`
 }
 
 type Host struct {
-	Status Status `xml:"status"`
-	Ports  []Port `xml:"ports>port"`
+	Status Status `xml:"status" json:"status"`
+	Ports  []Port `xml:"ports>port" json:"ports"`
 }
 
 type Port struct {
-	PortID   string   `xml:"portid,attr"`
-	Protocol string   `xml:"protocol,attr"`
-	State    State    `xml:"state"`
-	Service  Service  `xml:"service"`
-	Scripts  []Script `xml:"script"`
+	PortID   string   `xml:"portid,attr" json:"portid"`
+	Protocol string   `xml:"protocol,attr" json:"protocol"`
+	State    State    `xml:"state" json:"state"`
+	Service  Service  `xml:"service" json:"service"`
+	Scripts  []Script `xml:"script" json:"scripts"`
 }
 
 type Status struct {
-	State  string `xml:"state,attr"`
-	Reason string `xml:"reason,attr"`
+	State  string `xml:"state,attr" json:"state"`
+	Reason string `xml:"reason,attr" json:"reason"`
 }
 
 type State struct {
-	State  string `xml:"state,attr"`
-	Reason string `xml:"reason,attr"`
+	State  string `xml:"state,attr" json:"state"`
+	Reason string `xml:"reason,attr" json:"reason"`
 }
 
 type Service struct {
-	Name string `xml:"name,attr"`
+	Name string `xml:"name,attr" json:"name"`
 }
 
 type Script struct {
-	ID     string  `xml:"id,attr"`
-	Tables []Table `xml:"table"`
-	Elems  []Elem  `xml:"elem"`
+	ID     string  `xml:"id,attr" json:"id"`
+	Tables []Table `xml:"table" json:"tables"`
+	Elems  []Elem  `xml:"elem" json:"elems"`
 }
 
 type Table struct {
-	XMLName xml.Name `xml:"table"`
-	Key     string   `xml:"key,attr"`
-	Tables  []Table  `xml:"table"`
-	Elems   []Elem   `xml:"elem"`
+	XMLName xml.Name `xml:"table" json:"-"`
+	Key     string   `xml:"key,attr" json:"key"`
+	Tables  []Table  `xml:"table" json:"tables"`
+	Elems   []Elem   `xml:"elem" json:"elems"`
 }
 
 type Elem struct {
-	Key   string `xml:"key,attr"`
-	Value string `xml:",chardata"`
+	Key   string `xml:"key,attr" json:"key"`
+	Value string `xml:",chardata" json:"value"`
 }
 
 func main() {
 	host := flag.String("host", "127.0.0.1", "The target host or IP address to scan")
 	port := flag.String("port", "443", "The target port to scan")
+	jsonOutput := flag.Bool("json", false, "Output results in JSON format")
 	flag.Parse()
 
 	if !isNmapInstalled() {
@@ -82,7 +84,7 @@ func main() {
 		log.Fatalf("Error parsing Nmap XML output: %v", err)
 	}
 
-	printParsedResults(nmapResult)
+	printParsedResults(nmapResult, *jsonOutput)
 }
 
 func isNmapInstalled() bool {
@@ -90,9 +92,18 @@ func isNmapInstalled() bool {
 	return err == nil
 }
 
-func printParsedResults(run NmapRun) {
+func printParsedResults(run NmapRun, jsonOutput bool) {
 	if len(run.Hosts) == 0 {
-		fmt.Println("No hosts were scanned or host is down.")
+		if jsonOutput {
+			json.NewEncoder(os.Stdout).Encode(map[string]string{"message": "No hosts were scanned or host is down."})
+		} else {
+			fmt.Println("No hosts were scanned or host is down.")
+		}
+		return
+	}
+
+	if jsonOutput {
+		json.NewEncoder(os.Stdout).Encode(run)
 		return
 	}
 
