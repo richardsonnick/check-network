@@ -65,10 +65,6 @@ func main() {
 	port := flag.String("port", "443", "The target port to scan")
 	flag.Parse()
 
-	if *host == "" {
-		log.Fatal("Error: -host flag is required.")
-	}
-
 	if !isNmapInstalled() {
 		log.Fatal("Error: Nmap is not installed or not in the system's PATH. This program is a wrapper and requires Nmap to function.")
 	}
