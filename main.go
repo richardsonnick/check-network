@@ -70,7 +70,7 @@ func main() {
 	if !isNmapInstalled() {
 		log.Fatal("Error: Nmap is not installed or not in the system's PATH. This program is a wrapper and requires Nmap to function.")
 	}
-	fmt.Printf("Found Nmap. Starting scan on %s:%s...\n\n", *host, *port)
+	log.Printf("Found Nmap. Starting scan on %s:%s...\n\n", *host, *port)
 
 	cmd := exec.Command("nmap", "-sV", "--script", "ssl-enum-ciphers", "-p", *port, "-oX", "-", *host)
 
@@ -97,7 +97,7 @@ func printParsedResults(run NmapRun, jsonOutput bool) {
 		if jsonOutput {
 			json.NewEncoder(os.Stdout).Encode(map[string]string{"message": "No hosts were scanned or host is down."})
 		} else {
-			fmt.Println("No hosts were scanned or host is down.")
+			log.Println("No hosts were scanned or host is down.")
 		}
 		return
 	}
@@ -109,7 +109,7 @@ func printParsedResults(run NmapRun, jsonOutput bool) {
 
 	for _, host := range run.Hosts {
 		if host.Status.State != "up" {
-			fmt.Printf("Host %s is %s.\n", os.Args[len(os.Args)-1], host.Status.State)
+			log.Printf("Host %s is %s.\n", os.Args[len(os.Args)-1], host.Status.State)
 			continue
 		}
 		for _, port := range host.Ports {
