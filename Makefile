@@ -71,15 +71,44 @@ install-nmap:
 run: build
 	./$(BUILD_DIR)/$(BINARY_NAME)
 
+# Performance benchmarks
+.PHONY: benchmark
+benchmark:
+	$(GOTEST) -bench=. -benchmem -v
+
+.PHONY: benchmark-single
+benchmark-single:
+	$(GOTEST) -bench=BenchmarkSingleHostSSL -benchmem -v
+
+.PHONY: benchmark-port
+benchmark-port:
+	$(GOTEST) -bench=BenchmarkPortDiscovery -benchmem -v
+
+# Performance profiling
+.PHONY: profile-cpu
+profile-cpu:
+	$(GOTEST) -bench=BenchmarkSingleHostSSL -cpuprofile=cpu.prof -v
+	$(GOCMD) tool pprof cpu.prof
+
+.PHONY: profile-mem
+profile-mem:
+	$(GOTEST) -bench=BenchmarkSingleHostSSL -memprofile=mem.prof -v
+	$(GOCMD) tool pprof mem.prof
+
 # Help target
 .PHONY: help
 help:
 	@echo "Available targets:"
-	@echo "  build        - Build the binary"
-	@echo "  clean        - Clean build artifacts"
-	@echo "  deps         - Download and tidy dependencies"
-	@echo "  test         - Run tests"
-	@echo "  install      - Install binary to GOPATH/bin"
-	@echo "  install-nmap - Install nmap dependency"
-	@echo "  run          - Build and run with default parameters"
-	@echo "  help         - Show this help message"
+	@echo "  build             - Build the binary"
+	@echo "  clean             - Clean build artifacts"
+	@echo "  deps              - Download and tidy dependencies"
+	@echo "  test              - Run tests"
+	@echo "  benchmark         - Run all Go benchmarks with memory stats"
+	@echo "  benchmark-single  - Benchmark single host SSL scan"
+	@echo "  benchmark-port    - Benchmark port discovery"
+	@echo "  profile-cpu       - Profile CPU usage"
+	@echo "  profile-mem       - Profile memory usage"
+	@echo "  install           - Install binary to GOPATH/bin"
+	@echo "  install-nmap      - Install nmap dependency"
+	@echo "  run               - Build and run with default parameters"
+	@echo "  help              - Show this help message"
