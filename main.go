@@ -2,6 +2,8 @@ package main
 
 import (
 	"bufio"
+	"bytes"
+	"context"
 	"encoding/json"
 	"encoding/xml"
 	"flag"
@@ -9,11 +11,20 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	v1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/client-go/tools/remotecommand"
+	"k8s.io/kubectl/pkg/scheme"
 )
 
 type NmapRun struct {
@@ -82,12 +93,105 @@ type IPResult struct {
 }
 
 type PortResult struct {
-	Port     int     `json:"port"`
-	Protocol string  `json:"protocol"`
-	State    string  `json:"state"`
-	Service  string  `json:"service"`
-	NmapRun  NmapRun `json:"nmap_details"`
-	Error    string  `json:"error,omitempty"`
+	Port        int     `json:"port"`
+	Protocol    string  `json:"protocol"`
+	State       string  `json:"state"`
+	Service     string  `json:"service"`
+	ProcessName string  `json:"process_name,omitempty"`
+	NmapRun     NmapRun `json:"nmap_details"`
+	Error       string  `json:"error,omitempty"`
+}
+
+type K8sClient struct {
+	clientset *kubernetes.Clientset
+	restCfg   *rest.Config
+	podIPMap  map[string]v1.Pod
+	namespace string
+}
+
+func newK8sClient() (*K8sClient, error) {
+	config, err := rest.InClusterConfig()
+	if err != nil {
+		log.Printf("Not in cluster, trying kubeconfig")
+		kubeconfig := filepath.Join(os.Getenv("HOME"), ".kube", "config")
+		config, err = clientcmd.BuildConfigFromFlags("", kubeconfig)
+		if err != nil {
+			return nil, fmt.Errorf("could not get kubernetes config: %v", err)
+		}
+	}
+
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return nil, err
+	}
+
+	namespace := "default" // Or get from config
+	if nsBytes, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace"); err == nil {
+		namespace = string(nsBytes)
+	}
+
+	return &K8sClient{
+		clientset: clientset,
+		restCfg:   config,
+		podIPMap:  make(map[string]v1.Pod),
+		namespace: namespace,
+	}, nil
+}
+
+func (k *K8sClient) discoverPods() error {
+	log.Printf("Discovering pods in namespace %s", k.namespace)
+	pods, err := k.clientset.CoreV1().Pods(k.namespace).List(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		return err
+	}
+
+	for _, pod := range pods.Items {
+		if pod.Status.PodIP != "" {
+			k.podIPMap[pod.Status.PodIP] = pod
+		}
+	}
+	log.Printf("Discovered %d pods with IPs", len(k.podIPMap))
+	return nil
+}
+
+func (k *K8sClient) getProcessNameFromPod(podName string, port int) (string, error) {
+	command := []string{"/bin/sh", "-c", fmt.Sprintf("lsof -i :%d -sTCP:LISTEN -P -n -F c | head -n 1 | cut -c 2-", port)}
+
+	req := k.clientset.CoreV1().RESTClient().Post().
+		Resource("pods").
+		Name(podName).
+		Namespace(k.namespace).
+		SubResource("exec")
+
+	req.VersionedParams(&v1.PodExecOptions{
+		Command: command,
+		Stdin:   false,
+		Stdout:  true,
+		Stderr:  true,
+		TTY:     false,
+	}, scheme.ParameterCodec)
+
+	exec, err := remotecommand.NewSPDYExecutor(k.restCfg, "POST", req.URL())
+	if err != nil {
+		return "", fmt.Errorf("failed to create executor: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	err = exec.StreamWithContext(context.Background(), remotecommand.StreamOptions{
+		Stdout: &stdout,
+		Stderr: &stderr,
+	})
+
+	if err != nil {
+		return "", fmt.Errorf("exec failed: %v, stderr: %s", err, stderr.String())
+	}
+
+	processName := strings.TrimSpace(stdout.String())
+	if processName == "" {
+		return "unknown", fmt.Errorf("process not found in pod for port %d. stderr: %s", port, stderr.String())
+	}
+
+	return processName, nil
 }
 
 func main() {
@@ -110,6 +214,16 @@ func main() {
 		log.Printf("WARNING: Using %d concurrent scans might overwhelm your system. Consider using fewer workers.", *concurrentScans)
 	}
 
+	k8sClient, err := newK8sClient()
+	if err != nil {
+		log.Printf("Could not create kubernetes client, will not be able to get process names from pods. Error: %v", err)
+	} else {
+		if err := k8sClient.discoverPods(); err != nil {
+			log.Printf("Could not discover pods, will not be able to get process names. Error: %v", err)
+			k8sClient = nil // disable if we can't list pods
+		}
+	}
+
 	if *ipListFile != "" {
 		ips, err := readIPsFromFile(*ipListFile)
 		if err != nil {
@@ -117,10 +231,10 @@ func main() {
 		}
 
 		if *jsonOutput != "" {
-			_ = performClusterScanWithStreaming(ips, *jsonOutput, *concurrentScans)
+			_ = performClusterScanWithStreaming(ips, *jsonOutput, *concurrentScans, k8sClient)
 			log.Printf("Scan complete. Results written to: %s", *jsonOutput)
 		} else {
-			scanResults := performClusterScan(ips, *concurrentScans)
+			scanResults := performClusterScan(ips, *concurrentScans, k8sClient)
 			printClusterResults(scanResults)
 		}
 		return
@@ -295,7 +409,7 @@ func discoverOpenPorts(ip string) ([]int, error) {
 	return ports, nil
 }
 
-func scanIPPort(ip string, port int) (PortResult, error) {
+func scanIPPort(ip string, port int, k8sClient *K8sClient) (PortResult, error) {
 	log.Printf("Scanning SSL ciphers on %s:%d", ip, port)
 
 	cmd := exec.Command("nmap", "-sV", "--script", "ssl-enum-ciphers", "-p", strconv.Itoa(port), "-oX", "-", ip)
@@ -320,7 +434,6 @@ func scanIPPort(ip string, port int) (PortResult, error) {
 		NmapRun: nmapResult,
 	}
 
-	// Extract basic port information if available
 	if len(nmapResult.Hosts) > 0 {
 		for _, nmapPort := range nmapResult.Hosts[0].Ports {
 			if nmapPort.PortID == strconv.Itoa(port) {
@@ -332,10 +445,21 @@ func scanIPPort(ip string, port int) (PortResult, error) {
 		}
 	}
 
+	if k8sClient != nil {
+		if pod, found := k8sClient.podIPMap[ip]; found {
+			processName, err := k8sClient.getProcessNameFromPod(pod.Name, port)
+			if err != nil {
+				log.Printf("Could not get process name for %s:%d from pod %s: %v", ip, port, pod.Name, err)
+			} else {
+				result.ProcessName = processName
+			}
+		}
+	}
+
 	return result, nil
 }
 
-func performClusterScan(ips []string, concurrentScans int) ScanResults {
+func performClusterScan(ips []string, concurrentScans int, k8sClient *K8sClient) ScanResults {
 	startTime := time.Now()
 
 	fmt.Printf("========================================\n")
@@ -387,7 +511,7 @@ func performClusterScan(ips []string, concurrentScans int) ScanResults {
 					log.Printf("WORKER %d: Found %d open ports on %s", workerID, len(ports), ip)
 
 					for _, port := range ports {
-						portResult, err := scanIPPort(ip, port)
+						portResult, err := scanIPPort(ip, port, k8sClient)
 						if err != nil {
 							portResult = PortResult{
 								Port:  port,
@@ -434,7 +558,7 @@ func performClusterScan(ips []string, concurrentScans int) ScanResults {
 }
 
 // performClusterScanWithStreaming performs cluster scan and writes results incrementally to JSON file
-func performClusterScanWithStreaming(ips []string, outputFile string, concurrentScans int) ScanResults {
+func performClusterScanWithStreaming(ips []string, outputFile string, concurrentScans int, k8sClient *K8sClient) ScanResults {
 	startTime := time.Now()
 
 	fmt.Printf("========================================\n")
@@ -494,7 +618,7 @@ func performClusterScanWithStreaming(ips []string, outputFile string, concurrent
 
 					// Scan each open port
 					for _, port := range ports {
-						portResult, err := scanIPPort(ip, port)
+						portResult, err := scanIPPort(ip, port, k8sClient)
 						if err != nil {
 							portResult = PortResult{
 								Port:  port,
@@ -603,6 +727,9 @@ func printClusterResults(results ScanResults) {
 			fmt.Printf("    Protocol: %s\n", portResult.Protocol)
 			fmt.Printf("    State: %s\n", portResult.State)
 			fmt.Printf("    Service: %s\n", portResult.Service)
+			if portResult.ProcessName != "" {
+				fmt.Printf("    Process Name: %s\n", portResult.ProcessName)
+			}
 
 			// Print SSL cipher information if available
 			if len(portResult.NmapRun.Hosts) > 0 {
