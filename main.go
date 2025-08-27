@@ -91,7 +91,15 @@ type IPResult struct {
 	OpenPorts          []int               `json:"open_ports"`
 	PortResults        []PortResult        `json:"port_results"`
 	OpenshiftComponent *OpenshiftComponent `json:"openshift_component,omitempty"`
+	Services           []ServiceInfo       `json:"services,omitempty"`
 	Error              string              `json:"error,omitempty"`
+}
+
+type ServiceInfo struct {
+	Name      string `json:"name"`
+	Namespace string `json:"namespace"`
+	Type      string `json:"type"`
+	Ports     []int  `json:"ports,omitempty"`
 }
 
 type PortResult struct {
@@ -113,10 +121,11 @@ type OpenshiftComponent struct {
 }
 
 type K8sClient struct {
-	clientset *kubernetes.Clientset
-	restCfg   *rest.Config
-	podIPMap  map[string]v1.Pod
-	namespace string
+	clientset    *kubernetes.Clientset
+	restCfg      *rest.Config
+	podIPMap     map[string]v1.Pod
+	serviceIPMap map[string][]ServiceInfo  // IP -> Services mapping
+	namespace    string
 }
 
 func newK8sClient() (*K8sClient, error) {
@@ -141,10 +150,11 @@ func newK8sClient() (*K8sClient, error) {
 	}
 
 	return &K8sClient{
-		clientset: clientset,
-		restCfg:   config,
-		podIPMap:  make(map[string]v1.Pod),
-		namespace: namespace,
+		clientset:    clientset,
+		restCfg:      config,
+		podIPMap:     make(map[string]v1.Pod),
+		serviceIPMap: make(map[string][]ServiceInfo),
+		namespace:    namespace,
 	}, nil
 }
 
@@ -161,6 +171,67 @@ func (k *K8sClient) discoverPods() error {
 		}
 	}
 	log.Printf("Discovered %d pods with IPs across all namespaces", len(k.podIPMap))
+	return nil
+}
+
+func (k *K8sClient) discoverServices() error {
+	log.Printf("Discovering services and endpoints in all namespaces")
+	
+	// Get all services
+	services, err := k.clientset.CoreV1().Services("").List(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to list services: %v", err)
+	}
+
+	// Get all endpoints
+	endpoints, err := k.clientset.CoreV1().Endpoints("").List(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to list endpoints: %v", err)
+	}
+
+	// Build service map
+	serviceMap := make(map[string]v1.Service)
+	for _, svc := range services.Items {
+		key := fmt.Sprintf("%s/%s", svc.Namespace, svc.Name)
+		serviceMap[key] = svc
+	}
+
+	// Map endpoints to services
+	for _, ep := range endpoints.Items {
+		serviceKey := fmt.Sprintf("%s/%s", ep.Namespace, ep.Name)
+		service, exists := serviceMap[serviceKey]
+		if !exists {
+			continue
+		}
+
+		// Extract service ports
+		var servicePorts []int
+		for _, port := range service.Spec.Ports {
+			servicePorts = append(servicePorts, int(port.Port))
+		}
+
+		serviceInfo := ServiceInfo{
+			Name:      service.Name,
+			Namespace: service.Namespace,
+			Type:      string(service.Spec.Type),
+			Ports:     servicePorts,
+		}
+
+		// Map all endpoint IPs to this service
+		for _, subset := range ep.Subsets {
+			for _, address := range subset.Addresses {
+				if address.IP != "" {
+					k.serviceIPMap[address.IP] = append(k.serviceIPMap[address.IP], serviceInfo)
+				}
+			}
+		}
+	}
+
+	totalMappings := 0
+	for _, services := range k.serviceIPMap {
+		totalMappings += len(services)
+	}
+	log.Printf("Discovered %d service-to-IP mappings across %d unique IPs", totalMappings, len(k.serviceIPMap))
 	return nil
 }
 
@@ -374,6 +445,7 @@ func main() {
 	jsonOutput := flag.String("json", "", "Output results in JSON format to specified file (if empty, outputs to stdout in human-readable format)")
 	concurrentScans := flag.Int("j", 1, "Number of concurrent scans to run in parallel (speeds up large IP lists significantly!)")
 	allPods := flag.Bool("all-pods", false, "Scan all pods in the current namespace (overrides --iplist and --host)")
+	serviceMapping := flag.String("service-mapping", "", "Generate service-to-IP mapping JSON file (optional)")
 	flag.Parse()
 
 	if !isNmapInstalled() {
@@ -428,6 +500,16 @@ func main() {
 			scanResults := performClusterScan(allPodsInfo, *concurrentScans, k8sClient)
 			printClusterResults(scanResults)
 		}
+		
+		// Generate service mapping file if requested
+		if *serviceMapping != "" && k8sClient != nil {
+			if err := k8sClient.generateServiceMapping(*serviceMapping); err != nil {
+				log.Printf("Error generating service mapping: %v", err)
+			} else {
+				log.Printf("Service mapping written to: %s", *serviceMapping)
+			}
+		}
+		
 		return
 	}
 
@@ -878,6 +960,16 @@ func printClusterResults(results ScanResults) {
 			fmt.Printf("Maintainer: %s\n", ipResult.OpenshiftComponent.MaintainerComponent)
 			fmt.Printf("Is Bundle: %t\n", ipResult.OpenshiftComponent.IsBundle)
 		}
+		if len(ipResult.Services) > 0 {
+			fmt.Printf("Services:\n")
+			for _, service := range ipResult.Services {
+				fmt.Printf("  - %s/%s (Type: %s", service.Namespace, service.Name, service.Type)
+				if len(service.Ports) > 0 {
+					fmt.Printf(", Ports: %v", service.Ports)
+				}
+				fmt.Printf(")\n")
+			}
+		}
 		fmt.Printf("Status: %s\n", ipResult.Status)
 
 		if ipResult.Error != "" {
@@ -971,6 +1063,15 @@ type PodInfo struct {
 }
 
 func (k *K8sClient) getAllPodsInfo() []PodInfo {
+	// Discover both pods and services
+	if err := k.discoverPods(); err != nil {
+		log.Printf("Error discovering pods: %v", err)
+	}
+	
+	if err := k.discoverServices(); err != nil {
+		log.Printf("Error discovering services: %v", err)
+	}
+
 	pods, err := k.clientset.CoreV1().Pods("").List(context.Background(), metav1.ListOptions{})
 	if err != nil {
 		log.Printf("Error getting pods for info: %v", err)
@@ -1063,6 +1164,14 @@ func scanIP(k8sClient *K8sClient, ip string, pod PodInfo) IPResult {
 		PortResults: make([]PortResult, 0, len(ports)),
 	}
 
+	// Add service information if available
+	if k8sClient != nil {
+		if services, exists := k8sClient.serviceIPMap[ip]; exists {
+			ipResult.Services = services
+			log.Printf("Found %d services for IP %s: %v", len(services), ip, getServiceNames(services))
+		}
+	}
+
 	// Scan each open port for SSL ciphers
 	for _, port := range ports {
 		portResult, err := scanIPPort(ip, port, k8sClient, pod)
@@ -1076,4 +1185,75 @@ func scanIP(k8sClient *K8sClient, ip string, pod PodInfo) IPResult {
 	}
 
 	return ipResult
+}
+
+// Helper function to extract service names for logging
+func getServiceNames(services []ServiceInfo) []string {
+	names := make([]string, len(services))
+	for i, service := range services {
+		names[i] = fmt.Sprintf("%s/%s", service.Namespace, service.Name)
+	}
+	return names
+}
+
+// ServiceToIPMapping represents the service-to-IP mapping structure
+type ServiceToIPMapping struct {
+	ServiceName string   `json:"service_name"`
+	Namespace   string   `json:"namespace"`
+	PodIPs      []string `json:"pod_ips"`
+}
+
+// generateServiceMapping creates a service-to-IP mapping file similar to the oc command output
+func (k *K8sClient) generateServiceMapping(filename string) error {
+	log.Printf("Generating service-to-IP mapping file: %s", filename)
+	
+	// Build reverse mapping from service to IPs
+	serviceToIPs := make(map[string][]string)
+	
+	for ip, services := range k.serviceIPMap {
+		for _, service := range services {
+			key := fmt.Sprintf("%s/%s", service.Namespace, service.Name)
+			serviceToIPs[key] = append(serviceToIPs[key], ip)
+		}
+	}
+	
+	// Convert to the expected output format
+	var mappings []ServiceToIPMapping
+	for serviceKey, ips := range serviceToIPs {
+		parts := strings.Split(serviceKey, "/")
+		if len(parts) == 2 {
+			// Remove duplicates and sort
+			uniqueIPs := make(map[string]bool)
+			for _, ip := range ips {
+				uniqueIPs[ip] = true
+			}
+			
+			var sortedIPs []string
+			for ip := range uniqueIPs {
+				sortedIPs = append(sortedIPs, ip)
+			}
+			
+			mappings = append(mappings, ServiceToIPMapping{
+				ServiceName: parts[1],
+				Namespace:   parts[0],
+				PodIPs:      sortedIPs,
+			})
+		}
+	}
+	
+	// Write to file
+	file, err := os.Create(filename)
+	if err != nil {
+		return fmt.Errorf("failed to create service mapping file: %v", err)
+	}
+	defer file.Close()
+	
+	encoder := json.NewEncoder(file)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(mappings); err != nil {
+		return fmt.Errorf("failed to write service mapping JSON: %v", err)
+	}
+	
+	log.Printf("Successfully generated service mapping with %d services", len(mappings))
+	return nil
 }
