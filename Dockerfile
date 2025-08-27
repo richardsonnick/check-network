@@ -18,6 +18,9 @@ RUN microdnf install -y nmap tar && microdnf clean all
 
 COPY --from=builder /app/check-network /usr/local/bin/check-network
 
-USER 1001
+# Run as root for privileged operations
+USER 0
+
+ENV HOME=/root
 
 CMD ["sleep", "infinity"]

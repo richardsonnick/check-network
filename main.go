@@ -85,21 +85,30 @@ type ScanResults struct {
 }
 
 type IPResult struct {
-	IP          string       `json:"ip"`
-	Status      string       `json:"status"`
-	OpenPorts   []int        `json:"open_ports"`
-	PortResults []PortResult `json:"port_results"`
-	Error       string       `json:"error,omitempty"`
+	IP                 string              `json:"ip"`
+	Status             string              `json:"status"`
+	OpenPorts          []int               `json:"open_ports"`
+	PortResults        []PortResult        `json:"port_results"`
+	OpenshiftComponent *OpenshiftComponent `json:"openshift_component,omitempty"`
+	Error              string              `json:"error,omitempty"`
 }
 
 type PortResult struct {
-	Port        int     `json:"port"`
-	Protocol    string  `json:"protocol"`
-	State       string  `json:"state"`
-	Service     string  `json:"service"`
-	ProcessName string  `json:"process_name,omitempty"`
-	NmapRun     NmapRun `json:"nmap_details"`
-	Error       string  `json:"error,omitempty"`
+	Port          int     `json:"port"`
+	Protocol      string  `json:"protocol"`
+	State         string  `json:"state"`
+	Service       string  `json:"service"`
+	ProcessName   string  `json:"process_name,omitempty"`
+	ContainerName string  `json:"container_name,omitempty"`
+	NmapRun       NmapRun `json:"nmap_details"`
+	Error         string  `json:"error,omitempty"`
+}
+
+type OpenshiftComponent struct {
+	Component           string `json:"component"`
+	SourceLocation      string `json:"source_location"`
+	MaintainerComponent string `json:"maintainer_component"`
+	IsBundle            bool   `json:"is_bundle"`
 }
 
 type K8sClient struct {
@@ -139,8 +148,8 @@ func newK8sClient() (*K8sClient, error) {
 }
 
 func (k *K8sClient) discoverPods() error {
-	log.Printf("Discovering pods in namespace %s", k.namespace)
-	pods, err := k.clientset.CoreV1().Pods(k.namespace).List(context.Background(), metav1.ListOptions{})
+	log.Printf("Discovering pods in all namespaces")
+	pods, err := k.clientset.CoreV1().Pods("").List(context.Background(), metav1.ListOptions{})
 	if err != nil {
 		return err
 	}
@@ -150,25 +159,188 @@ func (k *K8sClient) discoverPods() error {
 			k.podIPMap[pod.Status.PodIP] = pod
 		}
 	}
-	log.Printf("Discovered %d pods with IPs", len(k.podIPMap))
+	log.Printf("Discovered %d pods with IPs across all namespaces", len(k.podIPMap))
 	return nil
 }
 
-func (k *K8sClient) getProcessNameFromPod(podName string, port int) (string, error) {
-	command := []string{"/bin/sh", "-c", fmt.Sprintf("lsof -i :%d -sTCP:LISTEN -P -n -F c | head -n 1 | cut -c 2-", port)}
+func (k *K8sClient) getOpenshiftComponentFromImage(image string) (*OpenshiftComponent, error) {
+	log.Printf("Analyzing OpenShift image: %s", image)
+
+	// Parse the image reference to extract component information
+	component := k.parseOpenshiftComponentFromImageRef(image)
+	if component != nil {
+		log.Printf("Successfully parsed component info from image: %s -> %s", image, component.Component)
+		return component, nil
+	}
+
+	// Fallback: try to get additional metadata from running pods using this image
+	log.Printf("Attempting to gather component info from cluster metadata for: %s", image)
+	return k.getComponentFromClusterMetadata(image)
+}
+
+func (k *K8sClient) parseOpenshiftComponentFromImageRef(image string) *OpenshiftComponent {
+	// Handle OpenShift release images - similar to check-payload approach
+	if strings.Contains(image, "quay.io/openshift-release-dev") {
+		// Extract component from OpenShift release image path
+		// Format: quay.io/openshift-release-dev/ocp-v4.0-art-dev@sha256:...
+		component := &OpenshiftComponent{
+			SourceLocation:      "quay.io/openshift-release-dev",
+			MaintainerComponent: "openshift",
+			IsBundle:           false,
+		}
+		
+		// Parse component name from image path or labels we might find
+		if strings.Contains(image, "oauth-openshift") {
+			component.Component = "oauth-openshift"
+		} else if strings.Contains(image, "apiserver") {
+			component.Component = "openshift-apiserver"
+		} else if strings.Contains(image, "controller-manager") {
+			component.Component = "openshift-controller-manager"
+		} else {
+			// Default component name from sha or extract from known patterns
+			component.Component = "openshift-component"
+		}
+		
+		return component
+	}
+
+	// Handle internal OpenShift registry images
+	if strings.Contains(image, "image-registry.openshift-image-registry.svc") {
+		parts := strings.Split(image, "/")
+		if len(parts) >= 3 {
+			return &OpenshiftComponent{
+				Component:           parts[len(parts)-1], // Use image name as component
+				SourceLocation:      "internal-registry",
+				MaintainerComponent: "user",
+				IsBundle:           false,
+			}
+		}
+	}
+
+	// Handle other registries (quay.io, registry.redhat.com, etc.)
+	if strings.Contains(image, "quay.io") || strings.Contains(image, "registry.redhat.com") {
+		return &OpenshiftComponent{
+			Component:           k.extractComponentNameFromImage(image),
+			SourceLocation:      k.extractRegistryFromImage(image),
+			MaintainerComponent: "redhat",
+			IsBundle:           false,
+		}
+	}
+
+	return nil
+}
+
+func (k *K8sClient) getComponentFromClusterMetadata(image string) (*OpenshiftComponent, error) {
+	// Try to find pods using this image and extract metadata
+	log.Printf("Searching cluster for pods using image: %s", image)
+	
+	pods, err := k.clientset.CoreV1().Pods("").List(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list pods for image metadata: %v", err)
+	}
+
+	// Look for pods using this exact image
+	for _, pod := range pods.Items {
+		for _, container := range pod.Spec.Containers {
+			if container.Image == image {
+				// Extract component info from pod labels or annotations
+				component := &OpenshiftComponent{
+					Component:           k.extractComponentFromPod(pod, container),
+					SourceLocation:      k.extractRegistryFromImage(image),
+					MaintainerComponent: k.extractMaintainerFromPod(pod),
+					IsBundle:           false,
+				}
+				return component, nil
+			}
+		}
+	}
+
+	// If no exact match found, return basic info
+	return &OpenshiftComponent{
+		Component:           k.extractComponentNameFromImage(image),
+		SourceLocation:      "unknown",
+		MaintainerComponent: "unknown", 
+		IsBundle:           false,
+	}, nil
+}
+
+func (k *K8sClient) extractComponentNameFromImage(image string) string {
+	// Extract component name from image URL
+	parts := strings.Split(image, "/")
+	if len(parts) > 0 {
+		// Get the last part (image name)
+		imageName := parts[len(parts)-1]
+		// Remove tag/sha if present
+		if strings.Contains(imageName, ":") {
+			imageName = strings.Split(imageName, ":")[0]
+		}
+		if strings.Contains(imageName, "@") {
+			imageName = strings.Split(imageName, "@")[0]
+		}
+		return imageName
+	}
+	return "unknown"
+}
+
+func (k *K8sClient) extractRegistryFromImage(image string) string {
+	if strings.Contains(image, "quay.io") {
+		return "quay.io"
+	} else if strings.Contains(image, "registry.redhat.com") {
+		return "registry.redhat.com"
+	} else if strings.Contains(image, "image-registry.openshift-image-registry.svc") {
+		return "internal-registry"
+	}
+	return strings.Split(image, "/")[0]
+}
+
+func (k *K8sClient) extractComponentFromPod(pod v1.Pod, container v1.Container) string {
+	// Try to extract component name from pod/container labels
+	if component, exists := pod.Labels["app"]; exists {
+		return component
+	}
+	if component, exists := pod.Labels["component"]; exists {
+		return component
+	}
+	if component, exists := pod.Labels["app.kubernetes.io/name"]; exists {
+		return component
+	}
+	// Fallback to container name or image name
+	if container.Name != "" {
+		return container.Name
+	}
+	return k.extractComponentNameFromImage(container.Image)
+}
+
+func (k *K8sClient) extractMaintainerFromPod(pod v1.Pod) string {
+	// Determine maintainer from namespace or labels
+	if strings.HasPrefix(pod.Namespace, "openshift-") {
+		return "openshift"
+	}
+	if strings.HasPrefix(pod.Namespace, "kube-") {
+		return "kubernetes"
+	}
+	if maintainer, exists := pod.Labels["maintainer"]; exists {
+		return maintainer
+	}
+	return "unknown"
+}
+
+func (k *K8sClient) getProcessNameFromPod(podName, namespace, containerName string, port int) (string, error) {
+	command := []string{"/bin/sh", "-c", fmt.Sprintf("lsof -i :%d -sTCP:LISTEN -P -n -F c | grep '^c' | cut -c 2- | head -n 1", port)}
 
 	req := k.clientset.CoreV1().RESTClient().Post().
 		Resource("pods").
 		Name(podName).
-		Namespace(k.namespace).
+		Namespace(namespace).
 		SubResource("exec")
 
 	req.VersionedParams(&v1.PodExecOptions{
-		Command: command,
-		Stdin:   false,
-		Stdout:  true,
-		Stderr:  true,
-		TTY:     false,
+		Container: containerName,
+		Command:   command,
+		Stdin:     false,
+		Stdout:    true,
+		Stderr:    true,
+		TTY:       false,
 	}, scheme.ParameterCodec)
 
 	exec, err := remotecommand.NewSPDYExecutor(k.restCfg, "POST", req.URL())
@@ -188,7 +360,7 @@ func (k *K8sClient) getProcessNameFromPod(podName string, port int) (string, err
 
 	processName := strings.TrimSpace(stdout.String())
 	if processName == "" {
-		return "unknown", fmt.Errorf("process not found in pod for port %d. stderr: %s", port, stderr.String())
+		return "", fmt.Errorf("process not found in container %s for port %d", containerName, port)
 	}
 
 	return processName, nil
@@ -200,6 +372,7 @@ func main() {
 	ipListFile := flag.String("iplist", "", "Path to file containing list of IPs to scan (one per line)")
 	jsonOutput := flag.String("json", "", "Output results in JSON format to specified file (if empty, outputs to stdout in human-readable format)")
 	concurrentScans := flag.Int("j", 1, "Number of concurrent scans to run in parallel (speeds up large IP lists significantly!)")
+	allPods := flag.Bool("all-pods", false, "Scan all pods in the current namespace (overrides --iplist and --host)")
 	flag.Parse()
 
 	if !isNmapInstalled() {
@@ -214,27 +387,44 @@ func main() {
 		log.Printf("WARNING: Using %d concurrent scans might overwhelm your system. Consider using fewer workers.", *concurrentScans)
 	}
 
-	k8sClient, err := newK8sClient()
-	if err != nil {
-		log.Printf("Could not create kubernetes client, will not be able to get process names from pods. Error: %v", err)
-	} else {
-		if err := k8sClient.discoverPods(); err != nil {
-			log.Printf("Could not discover pods, will not be able to get process names. Error: %v", err)
-			k8sClient = nil // disable if we can't list pods
-		}
-	}
+	var k8sClient *K8sClient
+	var err error
+	var allPodsInfo []PodInfo
 
-	if *ipListFile != "" {
+	if *allPods {
+		k8sClient, err = newK8sClient()
+		if err != nil {
+			log.Fatalf("Could not create kubernetes client for --all-pods: %v", err)
+		}
+		// No need to call discoverPods here, getAllPodsInfo will do it.
+		allPodsInfo = k8sClient.getAllPodsInfo()
+		log.Printf("Found %d pods to scan from the cluster.", len(allPodsInfo))
+	} else if *ipListFile != "" {
 		ips, err := readIPsFromFile(*ipListFile)
 		if err != nil {
 			log.Fatalf("Error reading IP list file: %v", err)
 		}
+		// Lazily create k8s client if not already created for --all-pods
+		if k8sClient == nil {
+			k8sClient, err = newK8sClient()
+			if err != nil {
+				log.Printf("Could not create kubernetes client, will not be able to get process names from pods. Error: %v", err)
+			} else {
+				if err := k8sClient.discoverPods(); err != nil {
+					log.Printf("Could not discover pods, will not be able to get process names. Error: %v", err)
+					k8sClient = nil // disable if we can't list pods
+				}
+			}
+		}
+		allPodsInfo = buildPodInfoFromIPs(ips, k8sClient)
+	}
 
+	if len(allPodsInfo) > 0 {
 		if *jsonOutput != "" {
-			_ = performClusterScanWithStreaming(ips, *jsonOutput, *concurrentScans, k8sClient)
+			performClusterScanWithStreaming(allPodsInfo, *jsonOutput, *concurrentScans, k8sClient)
 			log.Printf("Scan complete. Results written to: %s", *jsonOutput)
 		} else {
-			scanResults := performClusterScan(ips, *concurrentScans, k8sClient)
+			scanResults := performClusterScan(allPodsInfo, *concurrentScans, k8sClient)
 			printClusterResults(scanResults)
 		}
 		return
@@ -409,7 +599,7 @@ func discoverOpenPorts(ip string) ([]int, error) {
 	return ports, nil
 }
 
-func scanIPPort(ip string, port int, k8sClient *K8sClient) (PortResult, error) {
+func scanIPPort(ip string, port int, k8sClient *K8sClient, pod PodInfo) (PortResult, error) {
 	log.Printf("Scanning SSL ciphers on %s:%d", ip, port)
 
 	cmd := exec.Command("nmap", "-sV", "--script", "ssl-enum-ciphers", "-p", strconv.Itoa(port), "-oX", "-", ip)
@@ -446,12 +636,14 @@ func scanIPPort(ip string, port int, k8sClient *K8sClient) (PortResult, error) {
 	}
 
 	if k8sClient != nil {
-		if pod, found := k8sClient.podIPMap[ip]; found {
-			processName, err := k8sClient.getProcessNameFromPod(pod.Name, port)
-			if err != nil {
-				log.Printf("Could not get process name for %s:%d from pod %s: %v", ip, port, pod.Name, err)
-			} else {
+		// We have the pod info directly
+		for _, containerName := range pod.Containers {
+			processName, err := k8sClient.getProcessNameFromPod(pod.Name, pod.Namespace, containerName, port)
+			if err == nil && processName != "" {
 				result.ProcessName = processName
+				result.ContainerName = containerName
+				// Assuming one process per port, we can break after finding it.
+				break
 			}
 		}
 	}
@@ -459,24 +651,30 @@ func scanIPPort(ip string, port int, k8sClient *K8sClient) (PortResult, error) {
 	return result, nil
 }
 
-func performClusterScan(ips []string, concurrentScans int, k8sClient *K8sClient) ScanResults {
+func performClusterScan(allPodsInfo []PodInfo, concurrentScans int, k8sClient *K8sClient) ScanResults {
 	startTime := time.Now()
+
+	totalIPs := 0
+	for _, pod := range allPodsInfo {
+		totalIPs += len(pod.IPs)
+	}
 
 	fmt.Printf("========================================\n")
 	fmt.Printf("CONCURRENT CLUSTER SCAN STARTING\n")
 	fmt.Printf("========================================\n")
-	fmt.Printf("Total IPs to scan: %d\n", len(ips))
+	fmt.Printf("Total Pods to scan: %d\n", len(allPodsInfo))
+	fmt.Printf("Total IPs to scan: %d\n", totalIPs)
 	fmt.Printf("Concurrent workers: %d\n", concurrentScans)
 	fmt.Printf("========================================\n\n")
 
 	results := ScanResults{
 		Timestamp: startTime.Format(time.RFC3339),
-		TotalIPs:  len(ips),
-		IPResults: make([]IPResult, len(ips)),
+		TotalIPs:  totalIPs,
+		IPResults: make([]IPResult, 0, totalIPs),
 	}
 
-	// Create a channel to send IPs to workers
-	ipChan := make(chan int, len(ips))
+	// Create a channel to send PodInfo to workers
+	podChan := make(chan PodInfo, len(allPodsInfo))
 
 	// Use a WaitGroup to wait for all workers to complete
 	var wg sync.WaitGroup
@@ -489,56 +687,35 @@ func performClusterScan(ips []string, concurrentScans int, k8sClient *K8sClient)
 		wg.Add(1)
 		go func(workerID int) {
 			defer wg.Done()
-			for i := range ipChan {
-				ip := ips[i]
-				log.Printf("WORKER %d: Processing IP %d/%d: %s", workerID, i+1, len(ips), ip)
+			for pod := range podChan {
+				log.Printf("WORKER %d: Processing Pod %s/%s", workerID, pod.Namespace, pod.Name)
 
-				ipResult := IPResult{
-					IP:          ip,
-					Status:      "scanning",
-					OpenPorts:   make([]int, 0),
-					PortResults: make([]PortResult, 0),
-				}
-
-				ports, err := discoverOpenPorts(ip)
+				component, err := k8sClient.getOpenshiftComponentFromImage(pod.Image)
 				if err != nil {
-					ipResult.Status = "error"
-					ipResult.Error = err.Error()
-					log.Printf("WORKER %d: Error scanning %s: %v", workerID, ip, err)
-				} else {
-					ipResult.OpenPorts = ports
-					ipResult.Status = "scanned"
-					log.Printf("WORKER %d: Found %d open ports on %s", workerID, len(ports), ip)
-
-					for _, port := range ports {
-						portResult, err := scanIPPort(ip, port, k8sClient)
-						if err != nil {
-							portResult = PortResult{
-								Port:  port,
-								Error: err.Error(),
-							}
-						}
-						ipResult.PortResults = append(ipResult.PortResults, portResult)
-					}
+					log.Printf("Could not get openshift component for image %s: %v", pod.Image, err)
 				}
 
-				mu.Lock()
-				results.IPResults[i] = ipResult
-				results.ScannedIPs++
-				completed := results.ScannedIPs
-				mu.Unlock()
+				for _, ip := range pod.IPs {
+					ipResult := scanIP(k8sClient, ip, pod)
+					ipResult.OpenshiftComponent = component
 
-				log.Printf("WORKER %d: Completed %s (%d/%d IPs done)", workerID, ip, completed, len(ips))
+					mu.Lock()
+					results.IPResults = append(results.IPResults, ipResult)
+					results.ScannedIPs++
+					completed := results.ScannedIPs
+					mu.Unlock()
+					log.Printf("WORKER %d: Completed %s (%d/%d IPs done)", workerID, ip, completed, totalIPs)
+				}
 			}
 			log.Printf("WORKER %d: FINISHED", workerID)
 		}(workerID)
 	}
 
-	// Send IP indices to workers
-	for i := range ips {
-		ipChan <- i
+	// Send PodInfo to workers
+	for _, pod := range allPodsInfo {
+		podChan <- pod
 	}
-	close(ipChan)
+	close(podChan)
 
 	// Wait for all workers to complete
 	wg.Wait()
@@ -558,34 +735,28 @@ func performClusterScan(ips []string, concurrentScans int, k8sClient *K8sClient)
 }
 
 // performClusterScanWithStreaming performs cluster scan and writes results incrementally to JSON file
-func performClusterScanWithStreaming(ips []string, outputFile string, concurrentScans int, k8sClient *K8sClient) ScanResults {
+func performClusterScanWithStreaming(allPodsInfo []PodInfo, outputFile string, concurrentScans int, k8sClient *K8sClient) {
 	startTime := time.Now()
+
+	totalIPs := 0
+	for _, pod := range allPodsInfo {
+		totalIPs += len(pod.IPs)
+	}
 
 	fmt.Printf("========================================\n")
 	fmt.Printf("CONCURRENT STREAMING SCAN STARTING\n")
 	fmt.Printf("========================================\n")
-	fmt.Printf("Total IPs to scan: %d\n", len(ips))
+	fmt.Printf("Total Pods to scan: %d\n", len(allPodsInfo))
+	fmt.Printf("Total IPs to scan: %d\n", totalIPs)
 	fmt.Printf("Concurrent workers: %d\n", concurrentScans)
 	fmt.Printf("Output file: %s\n", outputFile)
-	fmt.Printf("Expected speedup: ~%.1fx faster\n", float64(concurrentScans)*0.8) // Conservative estimate
 	fmt.Printf("========================================\n\n")
 
-	results := ScanResults{
-		Timestamp: startTime.Format(time.RFC3339),
-		TotalIPs:  len(ips),
-		IPResults: make([]IPResult, len(ips)),
-	}
-
 	// Create channels for work distribution and result collection
-	ipChan := make(chan int, len(ips))
-	resultChan := make(chan struct {
-		index  int
-		result IPResult
-	}, len(ips))
+	podChan := make(chan PodInfo, len(allPodsInfo))
+	resultChan := make(chan IPResult, totalIPs)
 
 	var wg sync.WaitGroup
-	var mu sync.Mutex
-	scannedCount := 0
 
 	// Start worker goroutines
 	for w := 0; w < concurrentScans; w++ {
@@ -594,102 +765,98 @@ func performClusterScanWithStreaming(ips []string, outputFile string, concurrent
 		wg.Add(1)
 		go func(workerID int) {
 			defer wg.Done()
-			for i := range ipChan {
-				ip := ips[i]
-				log.Printf("STREAMING WORKER %d: Processing IP %d/%d: %s", workerID, i+1, len(ips), ip)
+			for pod := range podChan {
+				log.Printf("STREAMING WORKER %d: Processing Pod %d/%d: %s/%s", workerID, len(resultChan), len(allPodsInfo), pod.Namespace, pod.Name)
 
-				ipResult := IPResult{
-					IP:          ip,
-					Status:      "scanning",
-					OpenPorts:   make([]int, 0),
-					PortResults: make([]PortResult, 0),
-				}
-
-				// Discover open ports
-				ports, err := discoverOpenPorts(ip)
+				// Get OpenShift component information using Kubernetes API
+				component, err := k8sClient.getOpenshiftComponentFromImage(pod.Image)
 				if err != nil {
-					ipResult.Status = "error"
-					ipResult.Error = err.Error()
-					log.Printf("STREAMING WORKER %d: Error scanning %s: %v", workerID, ip, err)
-				} else {
-					ipResult.OpenPorts = ports
-					ipResult.Status = "scanned"
-					log.Printf("STREAMING WORKER %d: Found %d open ports on %s", workerID, len(ports), ip)
-
-					// Scan each open port
-					for _, port := range ports {
-						portResult, err := scanIPPort(ip, port, k8sClient)
-						if err != nil {
-							portResult = PortResult{
-								Port:  port,
-								Error: err.Error(),
-							}
-						}
-						ipResult.PortResults = append(ipResult.PortResults, portResult)
-					}
+					log.Printf("Could not get openshift component for image %s: %v", pod.Image, err)
+					component = nil
 				}
 
-				// Send result to result channel
-				resultChan <- struct {
-					index  int
-					result IPResult
-				}{i, ipResult}
-
-				log.Printf("STREAMING WORKER %d: Completed %s", workerID, ip)
+				for _, ip := range pod.IPs {
+					ipResult := scanIP(k8sClient, ip, pod)
+					ipResult.OpenshiftComponent = component
+					resultChan <- ipResult
+				}
+				log.Printf("STREAMING WORKER %d: Completed Pod %s/%s", workerID, pod.Namespace, pod.Name)
 			}
 			log.Printf("STREAMING WORKER %d: FINISHED", workerID)
 		}(workerID)
 	}
 
-	// Start a goroutine to collect results and update the results slice
+	// Start a goroutine to collect results and write them to the file
+	var collectorWg sync.WaitGroup
+	collectorWg.Add(1)
 	go func() {
-		for res := range resultChan {
-			mu.Lock()
-			results.IPResults[res.index] = res.result
-			results.ScannedIPs++
-			scannedCount++
-			mu.Unlock()
+		defer collectorWg.Done()
+		results := ScanResults{
+			Timestamp: startTime.Format(time.RFC3339),
+			TotalIPs:  totalIPs,
+			IPResults: make([]IPResult, 0, totalIPs),
 		}
+
+		file, err := os.Create(outputFile)
+		if err != nil {
+			log.Fatalf("Error creating output file: %v", err)
+		}
+		defer file.Close()
+
+		// Write the initial structure
+		file.WriteString("{\n")
+		file.WriteString(fmt.Sprintf("  \"timestamp\": \"%s\",\n", results.Timestamp))
+		file.WriteString(fmt.Sprintf("  \"total_ips\": %d,\n", results.TotalIPs))
+		file.WriteString("  \"scanned_ips\": 0,\n")
+		file.WriteString("  \"ip_results\": [\n")
+
+		isFirstResult := true
+		for i := 0; i < totalIPs; i++ {
+			ipResult := <-resultChan
+			results.IPResults = append(results.IPResults, ipResult)
+			results.ScannedIPs++
+
+			jsonData, err := json.MarshalIndent(ipResult, "    ", "  ")
+			if err != nil {
+				log.Printf("Error marshaling IP result: %v", err)
+				continue
+			}
+
+			if !isFirstResult {
+				file.WriteString(",\n")
+			}
+			file.WriteString("    " + string(jsonData))
+			isFirstResult = false
+		}
+
+		// Write the final structure
+		file.WriteString("\n  ]\n}\n")
 	}()
 
-	// Send IP indices to workers
-	for i := range ips {
-		ipChan <- i
+	// Send PodInfo to workers
+	for _, pod := range allPodsInfo {
+		podChan <- pod
 	}
-	close(ipChan)
+	close(podChan)
 
 	// Wait for all workers to complete
 	wg.Wait()
 	close(resultChan)
 
-	// Wait a moment for result collection to complete
-	for scannedCount < len(ips) {
-		time.Sleep(10 * time.Millisecond)
-	}
-
-	// Write final results to file
-	finalData, err := json.MarshalIndent(results, "", "  ")
-	if err != nil {
-		log.Fatalf("Error marshaling final results: %v", err)
-	}
-
-	if err := os.WriteFile(outputFile, finalData, 0644); err != nil {
-		log.Fatalf("Error writing final results to file: %v", err)
-	}
+	// Wait for the collector to finish writing
+	collectorWg.Wait()
 
 	duration := time.Since(startTime)
 
 	fmt.Printf("\n========================================\n")
 	fmt.Printf("CONCURRENT STREAMING SCAN COMPLETE!\n")
 	fmt.Printf("========================================\n")
-	fmt.Printf("Total IPs processed: %d\n", results.ScannedIPs)
+	fmt.Printf("Total IPs processed: %d\n", totalIPs)
 	fmt.Printf("Total time: %v\n", duration)
 	fmt.Printf("Concurrent workers used: %d\n", concurrentScans)
-	fmt.Printf("Average time per IP: %.2fs\n", duration.Seconds()/float64(results.ScannedIPs))
+	fmt.Printf("Average time per IP: %.2fs\n", duration.Seconds()/float64(totalIPs))
 	fmt.Printf("Output file: %s\n", outputFile)
 	fmt.Printf("========================================\n")
-
-	return results
 }
 
 func printClusterResults(results ScanResults) {
@@ -702,6 +869,12 @@ func printClusterResults(results ScanResults) {
 	for _, ipResult := range results.IPResults {
 		fmt.Printf("-----------------------------------------------------\n")
 		fmt.Printf("IP: %s\n", ipResult.IP)
+		if ipResult.OpenshiftComponent != nil {
+			fmt.Printf("Component: %s\n", ipResult.OpenshiftComponent.Component)
+			fmt.Printf("Source Location: %s\n", ipResult.OpenshiftComponent.SourceLocation)
+			fmt.Printf("Maintainer: %s\n", ipResult.OpenshiftComponent.MaintainerComponent)
+			fmt.Printf("Is Bundle: %t\n", ipResult.OpenshiftComponent.IsBundle)
+		}
 		fmt.Printf("Status: %s\n", ipResult.Status)
 
 		if ipResult.Error != "" {
@@ -728,7 +901,7 @@ func printClusterResults(results ScanResults) {
 			fmt.Printf("    State: %s\n", portResult.State)
 			fmt.Printf("    Service: %s\n", portResult.Service)
 			if portResult.ProcessName != "" {
-				fmt.Printf("    Process Name: %s\n", portResult.ProcessName)
+				fmt.Printf("    Process Name: %s (%s)\n", portResult.ProcessName, portResult.ContainerName)
 			}
 
 			// Print SSL cipher information if available
@@ -783,4 +956,121 @@ func printTableWithIndent(tables []Table, indentLevel int) {
 			printTableWithIndent(table.Tables, indentLevel+1)
 		}
 	}
+}
+
+// PodInfo holds information about a pod and its associated IPs
+type PodInfo struct {
+	Name       string   // Pod name
+	Namespace  string   // Pod namespace
+	Image      string   // Container image
+	IPs        []string // List of IPs assigned to the pod
+	Containers []string // List of container names
+}
+
+func (k *K8sClient) getAllPodsInfo() []PodInfo {
+	pods, err := k.clientset.CoreV1().Pods("").List(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		log.Printf("Error getting pods for info: %v", err)
+		return nil
+	}
+
+	infos := make([]PodInfo, 0, len(pods.Items))
+	for _, pod := range pods.Items {
+		if pod.Status.PodIP == "" || pod.Status.Phase != v1.PodRunning {
+			continue
+		}
+
+		var containerNames []string
+		var image string
+		if len(pod.Spec.Containers) > 0 {
+			image = pod.Spec.Containers[0].Image // Taking the first one for now
+			for _, c := range pod.Spec.Containers {
+				containerNames = append(containerNames, c.Name)
+			}
+		}
+
+		var ips []string
+		for _, podIP := range pod.Status.PodIPs {
+			ips = append(ips, podIP.IP)
+		}
+
+		if len(ips) > 0 {
+			infos = append(infos, PodInfo{
+				Name:       pod.Name,
+				Namespace:  pod.Namespace,
+				Image:      image,
+				IPs:        ips,
+				Containers: containerNames,
+			})
+		}
+	}
+	return infos
+}
+
+func buildPodInfoFromIPs(ips []string, k8sClient *K8sClient) []PodInfo {
+	if k8sClient == nil {
+		// No k8s client, just return basic info
+		infos := make([]PodInfo, len(ips))
+		for i, ip := range ips {
+			infos[i] = PodInfo{IPs: []string{ip}}
+		}
+		return infos
+	}
+
+	infos := make([]PodInfo, 0, len(ips))
+	for _, ip := range ips {
+		if pod, found := k8sClient.podIPMap[ip]; found {
+			var containerNames []string
+			var image string
+			if len(pod.Spec.Containers) > 0 {
+				image = pod.Spec.Containers[0].Image
+				for _, c := range pod.Spec.Containers {
+					containerNames = append(containerNames, c.Name)
+				}
+			}
+			infos = append(infos, PodInfo{
+				Name:       pod.Name,
+				Namespace:  pod.Namespace,
+				Image:      image,
+				IPs:        []string{ip},
+				Containers: containerNames,
+			})
+		} else {
+			// IP not found in map, treat as external
+			infos = append(infos, PodInfo{IPs: []string{ip}})
+		}
+	}
+	return infos
+}
+
+func scanIP(k8sClient *K8sClient, ip string, pod PodInfo) IPResult {
+	ports, err := discoverOpenPorts(ip)
+	if err != nil {
+		return IPResult{
+			IP:     ip,
+			Status: "error",
+			Error:  err.Error(),
+		}
+	}
+
+	ipResult := IPResult{
+		IP:          ip,
+		Status:      "scanned",
+		OpenPorts:   ports,
+		PortResults: make([]PortResult, 0, len(ports)),
+	}
+
+	// Scan each open port for SSL ciphers
+	for _, port := range ports {
+		portResult, err := scanIPPort(ip, port, k8sClient, pod)
+		if err != nil {
+			portResult = PortResult{
+				Port:  port,
+				Error: err.Error(),
+			}
+		}
+		ipResult.PortResults = append(ipResult.PortResults, portResult)
+	}
+
+	return ipResult
 }
