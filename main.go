@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	v1 "k8s.io/api/core/v1"
@@ -757,6 +758,7 @@ func performClusterScanWithStreaming(allPodsInfo []PodInfo, outputFile string, c
 	resultChan := make(chan IPResult, totalIPs)
 
 	var wg sync.WaitGroup
+	var processedPods int64 // Atomic counter for processed pods
 
 	// Start worker goroutines
 	for w := 0; w < concurrentScans; w++ {
@@ -766,7 +768,8 @@ func performClusterScanWithStreaming(allPodsInfo []PodInfo, outputFile string, c
 		go func(workerID int) {
 			defer wg.Done()
 			for pod := range podChan {
-				log.Printf("STREAMING WORKER %d: Processing Pod %d/%d: %s/%s", workerID, len(resultChan), len(allPodsInfo), pod.Namespace, pod.Name)
+				currentPod := atomic.AddInt64(&processedPods, 1)
+				log.Printf("STREAMING WORKER %d: Processing Pod %d/%d: %s/%s", workerID, currentPod, len(allPodsInfo), pod.Namespace, pod.Name)
 
 				// Get OpenShift component information using Kubernetes API
 				component, err := k8sClient.getOpenshiftComponentFromImage(pod.Image)
@@ -780,7 +783,7 @@ func performClusterScanWithStreaming(allPodsInfo []PodInfo, outputFile string, c
 					ipResult.OpenshiftComponent = component
 					resultChan <- ipResult
 				}
-				log.Printf("STREAMING WORKER %d: Completed Pod %s/%s", workerID, pod.Namespace, pod.Name)
+				log.Printf("STREAMING WORKER %d: Completed Pod %d/%d: %s/%s", workerID, currentPod, len(allPodsInfo), pod.Namespace, pod.Name)
 			}
 			log.Printf("STREAMING WORKER %d: FINISHED", workerID)
 		}(workerID)
