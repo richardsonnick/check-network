@@ -1,1 +1,9 @@
 check-network
+.gitignore
+results-bak/
+result-archive/
+api-config-results/
+*.csv
+*pod_ips.txt
+results.json
+small_test.txt
