@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"encoding/xml"
 	"flag"
@@ -443,6 +444,8 @@ func main() {
 	port := flag.String("port", "443", "The target port to scan")
 	ipListFile := flag.String("iplist", "", "Path to file containing list of IPs to scan (one per line)")
 	jsonOutput := flag.String("json", "", "Output results in JSON format to specified file (if empty, outputs to stdout in human-readable format)")
+	csvOutput := flag.String("csv", "", "Output results in CSV format to specified file")
+	csvColumns := flag.String("csv-columns", "default", "CSV columns to include: 'all', 'default', 'minimal', or comma-separated list")
 	concurrentScans := flag.Int("j", 1, "Number of concurrent scans to run in parallel (speeds up large IP lists significantly!)")
 	allPods := flag.Bool("all-pods", false, "Scan all pods in the current namespace (overrides --iplist and --host)")
 	serviceMapping := flag.String("service-mapping", "", "Generate service-to-IP mapping JSON file (optional)")
@@ -493,20 +496,63 @@ func main() {
 	}
 
 	if len(allPodsInfo) > 0 {
-		if *jsonOutput != "" {
+		var scanResults ScanResults
+		
+		// If CSV output is requested, we need the full results, so use regular scan
+		// If only JSON is requested, use streaming for better performance
+		if *csvOutput != "" {
+			scanResults = performClusterScan(allPodsInfo, *concurrentScans, k8sClient)
+			
+			// Write JSON if also requested
+			if *jsonOutput != "" {
+				// Convert ScanResults to JSON format
+				if err := writeJSONOutput(scanResults, *jsonOutput); err != nil {
+					log.Printf("Error writing JSON output: %v", err)
+				} else {
+					log.Printf("JSON results written to: %s", *jsonOutput)
+				}
+			}
+			
+			// Write CSV output
+			if err := writeCSVOutput(scanResults, *csvOutput, *csvColumns); err != nil {
+				log.Printf("Error writing CSV output: %v", err)
+			} else {
+				log.Printf("CSV results written to: %s", *csvOutput)
+			}
+			
+			// Print to console if no output files specified
+			if *jsonOutput == "" {
+				printClusterResults(scanResults)
+			}
+		} else if *jsonOutput != "" {
+			// JSON-only output, use streaming for performance
 			performClusterScanWithStreaming(allPodsInfo, *jsonOutput, *concurrentScans, k8sClient)
 			log.Printf("Scan complete. Results written to: %s", *jsonOutput)
 		} else {
-			scanResults := performClusterScan(allPodsInfo, *concurrentScans, k8sClient)
+			// Console output only
+			scanResults = performClusterScan(allPodsInfo, *concurrentScans, k8sClient)
 			printClusterResults(scanResults)
 		}
 		
-		// Generate service mapping file if requested
-		if *serviceMapping != "" && k8sClient != nil {
-			if err := k8sClient.generateServiceMapping(*serviceMapping); err != nil {
-				log.Printf("Error generating service mapping: %v", err)
-			} else {
-				log.Printf("Service mapping written to: %s", *serviceMapping)
+		// Auto-generate service mapping for cluster scans
+		if k8sClient != nil {
+			mappingFile := *serviceMapping
+			if mappingFile == "" && *allPods {
+				// Auto-generate mapping file for cluster scans
+				mappingFile = "service-to-pod-ip-mapping.json"
+				
+				// If outputting to /tmp (like in pod), put service mapping there too
+				if *csvOutput != "" && strings.HasPrefix(*csvOutput, "/tmp/") {
+					mappingFile = "/tmp/service-to-pod-ip-mapping.json"
+				}
+			}
+			
+			if mappingFile != "" {
+				if err := k8sClient.generateServiceMapping(mappingFile); err != nil {
+					log.Printf("Error generating service mapping: %v", err)
+				} else {
+					log.Printf("Service mapping written to: %s", mappingFile)
+				}
 			}
 		}
 		
@@ -531,7 +577,46 @@ func main() {
 		if err := writeJSONOutput(nmapResult, *jsonOutput); err != nil {
 			log.Fatalf("Error writing JSON output: %v", err)
 		}
-	} else {
+		log.Printf("JSON results written to %s", *jsonOutput)
+	}
+	
+	if *csvOutput != "" {
+		// Convert single scan to ScanResults format for CSV
+		singleResult := ScanResults{
+			Timestamp:  time.Now().Format(time.RFC3339),
+			TotalIPs:   1,
+			ScannedIPs: 1,
+			IPResults: []IPResult{{
+				IP:          *host,
+				Status:      "scanned",
+				OpenPorts:   []int{}, // Will be extracted from nmapResult
+				PortResults: []PortResult{},
+			}},
+		}
+		
+		// Extract port information from nmap result
+		if len(nmapResult.Hosts) > 0 && len(nmapResult.Hosts[0].Ports) > 0 {
+			for _, nmapPort := range nmapResult.Hosts[0].Ports {
+				if port, err := strconv.Atoi(nmapPort.PortID); err == nil {
+					singleResult.IPResults[0].OpenPorts = append(singleResult.IPResults[0].OpenPorts, port)
+					singleResult.IPResults[0].PortResults = append(singleResult.IPResults[0].PortResults, PortResult{
+						Port:     port,
+						Protocol: nmapPort.Protocol,
+						State:    nmapPort.State.State,
+						Service:  nmapPort.Service.Name,
+						NmapRun:  nmapResult,
+					})
+				}
+			}
+		}
+		
+		if err := writeCSVOutput(singleResult, *csvOutput, *csvColumns); err != nil {
+			log.Fatalf("Error writing CSV output: %v", err)
+		}
+		log.Printf("CSV results written to %s", *csvOutput)
+	}
+	
+	if *jsonOutput == "" && *csvOutput == "" {
 		printParsedResults(nmapResult)
 	}
 }
@@ -1256,4 +1341,283 @@ func (k *K8sClient) generateServiceMapping(filename string) error {
 	
 	log.Printf("Successfully generated service mapping with %d services", len(mappings))
 	return nil
+}
+
+// CSVColumnInfo defines metadata for CSV columns
+type CSVColumnInfo struct {
+	Name        string
+	Description string
+}
+
+// All available CSV columns
+var allCSVColumns = []CSVColumnInfo{
+	{"IP Address", "Target IP address"},
+	{"Port", "Specific port number"},
+	{"Service", "Service name detected by nmap"},
+	{"Pod", "Associated Kubernetes service names"},
+	{"Namespace", "Service namespaces"},
+	{"TLS Version", "TLS/SSL protocol version"},
+	{"Cipher Name", "Specific cipher suite name"},
+	{"Status", "Scan status (scanned/error/timeout)"},
+	{"Process Name", "Process listening on port"},
+	{"Container Name", "Container hosting the process"},
+	{"OpenShift Component", "Identified OpenShift component"},
+	{"Component Source", "Source location/registry"},
+	{"Component Maintainer", "Component maintainer"},
+	{"Service Type", "Kubernetes service type"},
+	{"Error", "Error message if scan failed"},
+}
+
+// Predefined column sets
+var csvColumnSets = map[string][]string{
+	"minimal": {"IP Address", "Port", "Service", "TLS Version", "Cipher Suites"},
+	"default": {"IP Address", "Port", "Service", "Pod", "Namespace", "TLS Version", "Cipher Suites", "Status", "Process Name", "OpenShift Component"},
+	"all":     {"IP Address", "Port", "Service", "Pod", "Namespace", "TLS Version", "Cipher Suites", "Status", "Process Name", "Container Name", "OpenShift Component", "Component Source", "Component Maintainer", "Service Type", "Error"},
+}
+
+// parseCSVColumns parses the CSV columns specification
+func parseCSVColumns(spec string) []string {
+	// Check if it's a predefined column set
+	if columns, exists := csvColumnSets[spec]; exists {
+		return columns
+	}
+	
+	// Custom column list
+	if strings.Contains(spec, ",") {
+		columns := strings.Split(spec, ",")
+		for i, col := range columns {
+			columns[i] = strings.TrimSpace(col)
+		}
+		return columns
+	}
+	
+	// Default fallback
+	return csvColumnSets["default"]
+}
+
+// writeCSVOutput writes scan results to a CSV file with one row per IP/port/TLS version
+func writeCSVOutput(results ScanResults, filename string, columnsSpec string) error {
+	log.Printf("Writing CSV output to: %s", filename)
+	
+	file, err := os.Create(filename)
+	if err != nil {
+		return fmt.Errorf("failed to create CSV file: %v", err)
+	}
+	defer file.Close()
+	
+	writer := csv.NewWriter(file)
+	defer writer.Flush()
+	
+	// Parse column selection
+	selectedColumns := parseCSVColumns(columnsSpec)
+	log.Printf("Using CSV columns: %v", selectedColumns)
+	
+	// Write header
+	if err := writer.Write(selectedColumns); err != nil {
+		return fmt.Errorf("failed to write CSV header: %v", err)
+	}
+	
+	rowCount := 0
+	
+	// Write data rows - one row per IP/port/TLS version with cipher suites as lists
+	for _, ipResult := range results.IPResults {
+		// Extract common data for this IP
+		ipAddress := ipResult.IP
+		status := ipResult.Status
+		errorMsg := ipResult.Error
+		
+		// Extract service information
+		var podServices, namespaces, serviceTypes []string
+		for _, service := range ipResult.Services {
+			podServices = append(podServices, service.Name)
+			namespaces = append(namespaces, service.Namespace)
+			serviceTypes = append(serviceTypes, service.Type)
+		}
+		podService := joinOrNA(removeDuplicates(podServices))
+		namespace := joinOrNA(removeDuplicates(namespaces))
+		serviceType := joinOrNA(removeDuplicates(serviceTypes))
+		
+		// Extract OpenShift component info
+		componentName := "N/A"
+		componentSource := "N/A"
+		componentMaintainer := "N/A"
+		if ipResult.OpenshiftComponent != nil {
+			componentName = stringOrNA(ipResult.OpenshiftComponent.Component)
+			componentSource = stringOrNA(ipResult.OpenshiftComponent.SourceLocation)
+			componentMaintainer = stringOrNA(ipResult.OpenshiftComponent.MaintainerComponent)
+		}
+		
+		// Process each port result
+		for _, portResult := range ipResult.PortResults {
+			port := strconv.Itoa(portResult.Port)
+			service := stringOrNA(portResult.Service)
+			processName := stringOrNA(portResult.ProcessName)
+			containerName := stringOrNA(portResult.ContainerName)
+			
+			// Collect TLS versions and their cipher suites
+			tlsToCiphers := make(map[string][]string)
+			
+			// Extract TLS versions and ciphers from nmap script results
+			for _, host := range portResult.NmapRun.Hosts {
+				for _, nmapPort := range host.Ports {
+					for _, script := range nmapPort.Scripts {
+						if script.ID == "ssl-enum-ciphers" {
+							for _, table := range script.Tables {
+								tlsVersion := table.Key
+								if tlsVersion == "" {
+									continue
+								}
+								
+								// Find ciphers for this TLS version
+								for _, subTable := range table.Tables {
+									if subTable.Key == "ciphers" {
+										var cipherList []string
+										for _, cipherTable := range subTable.Tables {
+											cipherName := ""
+											for _, elem := range cipherTable.Elems {
+												if elem.Key == "name" {
+													cipherName = elem.Value
+													break
+												}
+											}
+											if cipherName != "" {
+												cipherList = append(cipherList, cipherName)
+											}
+										}
+										if len(cipherList) > 0 {
+											tlsToCiphers[tlsVersion] = cipherList
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+			
+			// Create one row per TLS version (if any TLS data found)
+			if len(tlsToCiphers) > 0 {
+				for tlsVersion, ciphers := range tlsToCiphers {
+					rowData := map[string]string{
+						"IP Address":           ipAddress,
+						"Port":                port,
+						"Service":             service,
+						"Pod":                 podService,
+						"Namespace":           namespace,
+						"TLS Version":         tlsVersion,
+						"Cipher Suites":       strings.Join(ciphers, ", "),
+						"Status":              status,
+						"Process Name":        processName,
+						"Container Name":      containerName,
+						"OpenShift Component": componentName,
+						"Component Source":    componentSource,
+						"Component Maintainer": componentMaintainer,
+						"Service Type":        serviceType,
+						"Error":               errorMsg,
+					}
+					
+					row := buildCSVRow(selectedColumns, rowData)
+					if err := writer.Write(row); err != nil {
+						return fmt.Errorf("failed to write CSV row: %v", err)
+					}
+					rowCount++
+				}
+			} else {
+				// No TLS data found, add basic row
+				rowData := map[string]string{
+					"IP Address":           ipAddress,
+					"Port":                port,
+					"Service":             service,
+					"Pod":                 podService,
+					"Namespace":           namespace,
+					"TLS Version":         "N/A",
+					"Cipher Suites":       "N/A",
+					"Status":              status,
+					"Process Name":        processName,
+					"Container Name":      containerName,
+					"OpenShift Component": componentName,
+					"Component Source":    componentSource,
+					"Component Maintainer": componentMaintainer,
+					"Service Type":        serviceType,
+					"Error":               errorMsg,
+				}
+				
+				row := buildCSVRow(selectedColumns, rowData)
+				if err := writer.Write(row); err != nil {
+					return fmt.Errorf("failed to write CSV row: %v", err)
+				}
+				rowCount++
+			}
+		}
+		
+		// If no port results but IP has error, add error row
+		if len(ipResult.PortResults) == 0 && errorMsg != "" {
+			rowData := map[string]string{
+				"IP Address":           ipAddress,
+				"Port":                "N/A",
+				"Service":             "N/A",
+				"Pod":                 podService,
+				"Namespace":           namespace,
+				"TLS Version":         "N/A",
+				"Cipher Suites":       "N/A",
+				"Status":              status,
+				"Process Name":        "N/A",
+				"Container Name":      "N/A",
+				"OpenShift Component": componentName,
+				"Component Source":    componentSource,
+				"Component Maintainer": componentMaintainer,
+				"Service Type":        serviceType,
+				"Error":               errorMsg,
+			}
+			row := buildCSVRow(selectedColumns, rowData)
+			if err := writer.Write(row); err != nil {
+				return fmt.Errorf("failed to write CSV row: %v", err)
+			}
+			rowCount++
+		}
+	}
+	
+	log.Printf("Successfully wrote %d rows to CSV file with columns: %v", rowCount, selectedColumns)
+	return nil
+}
+
+// Helper function to build CSV row based on selected columns
+func buildCSVRow(selectedColumns []string, data map[string]string) []string {
+	row := make([]string, len(selectedColumns))
+	for i, col := range selectedColumns {
+		if value, exists := data[col]; exists {
+			row[i] = value
+		} else {
+			row[i] = "N/A"
+		}
+	}
+	return row
+}
+
+// Helper functions
+func stringOrNA(s string) string {
+	if s == "" {
+		return "N/A"
+	}
+	return s
+}
+
+func joinOrNA(slice []string) string {
+	if len(slice) == 0 {
+		return "N/A"
+	}
+	return strings.Join(slice, ", ")
+}
+
+// Helper function to remove duplicates from string slice
+func removeDuplicates(slice []string) []string {
+	keys := make(map[string]bool)
+	var result []string
+	for _, item := range slice {
+		if !keys[item] && item != "" {
+			keys[item] = true
+			result = append(result, item)
+		}
+	}
+	return result
 }

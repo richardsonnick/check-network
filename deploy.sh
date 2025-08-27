@@ -200,24 +200,28 @@ fi
 
 echo "--> Executing the scan in the background inside the pod..."
 # The command is run in the background of the script, but synchronously inside the pod
-oc exec -n "$CURRENT_PROJECT" "$POD_NAME" -- /usr/local/bin/check-network -all-pods --json /tmp/results.json --service-mapping /tmp/service-to-pod-ip-mapping.json -j 12
+oc exec -n "$CURRENT_PROJECT" "$POD_NAME" -- /usr/local/bin/check-network -all-pods -csv /tmp/tls-scan-\$(date +%Y%m%d).csv -json /tmp/tls-scan-\$(date +%Y%m%d).json -j 15
 check_error "Executing scan"
 
 print_header "Step 3: Retrieving and Displaying Results"
-echo "--> Copying results from the pod..."
-oc cp "$CURRENT_PROJECT/$POD_NAME:/tmp/results.json" ./results.json
-check_error "Copying results from pod"
+echo "--> Copying CSV results from the pod..."
+SCAN_DATE=$(date +%Y%m%d)
+oc cp "$CURRENT_PROJECT/$POD_NAME:/tmp/security-scan-$SCAN_DATE.csv" ./security-scan-$SCAN_DATE.csv
+check_error "Copying CSV results from pod"
 
 echo "--> Copying service mapping from the pod..."
 oc cp "$CURRENT_PROJECT/$POD_NAME:/tmp/service-to-pod-ip-mapping.json" ./service-to-pod-ip-mapping.json
 check_error "Copying service mapping from pod"
 
-echo "--> Scan complete. Results are in 'results.json'"
-echo "--> Service-to-IP mapping available in 'service-to-pod-ip-mapping.json'"
-echo "--> For a summary, you can run:"
-echo "   cat results.json | jq '. | length'  # Count of total endpoints"
-echo "   cat results.json | jq '. | group_by(.status) | map({key: .[0].status, count: . | length})'  # Results summary"
-echo "   cat results.json | jq 'map(select(.status == \"error\"))'  # Failed endpoints only"
+echo "--> Scan complete! Results available:"
+echo "   📊 CSV Security Report: security-scan-$SCAN_DATE.csv"
+echo "   🔗 Service-to-IP Mapping: service-to-pod-ip-mapping.json"
+echo ""
+echo "--> Quick analysis commands:"
+echo "   wc -l security-scan-$SCAN_DATE.csv  # Count of scanned IPs"
+echo "   head -10 security-scan-$SCAN_DATE.csv  # First 10 rows"
+echo "   grep -v ',scanned,' security-scan-$SCAN_DATE.csv  # Failed/error endpoints"
+echo "   cut -d',' -f1,3 security-scan-$SCAN_DATE.csv | grep -v '^IP,'  # IP and open ports"
 echo "   cat service-to-pod-ip-mapping.json | jq '.[0:5]'  # First 5 service mappings"
 
 
