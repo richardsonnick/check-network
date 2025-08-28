@@ -2,17 +2,6 @@
 
 A network security scanner for OpenShift/Kubernetes clusters that combines nmap port scanning with SSL/TLS cipher enumeration and OpenShift component analysis.
 
-## Features
-
--  **Cluster-wide scanning**: Scan all pods across all namespaces in your OpenShift/Kubernetes cluster
--  **Port discovery**: Automatic detection of open ports on target IPs
--  **SSL/TLS analysis**: Deep cipher suite enumeration using nmap's `ssl-enum-ciphers` script  
--  **OpenShift integration**: Extracts component metadata from running pods
--  **High performance**: Concurrent scanning with configurable worker pools
--  **Multiple output formats**: Human-readable console output or structured JSON
--  **Flexible targeting**: Scan individual hosts, IP lists, or entire clusters
--  **Process identification**: Identifies processes listening on discovered ports
-
 ## Prerequisites
 
 - **nmap** - Must be installed and available in PATH
@@ -34,11 +23,6 @@ A network security scanner for OpenShift/Kubernetes clusters that combines nmap 
    # KUBECONFIG must point to the target OpenShift/Kubernetes cluster you want to scan
    ```
 
-3. **Verify cluster connectivity:**
-   ```bash
-   oc get nodes  # or kubectl get nodes
-   ```
-
 ### OpenShift Deployment (Recommended)
 
 For comprehensive cluster scanning, deploy as a privileged pod:
@@ -56,7 +40,6 @@ The deployment script automatically:
 - Grants necessary RBAC permissions (cluster-reader, pod-exec)  
 - Builds and deploys scanner image
 - Runs CSV+Json scan with 15 concurrent workers
-- Auto-generates service-to-IP mapping
 
 ## Usage
 
@@ -177,14 +160,6 @@ Comprehensive security format with **one row per IP/port/TLS version** and confi
 - `Service Type` - Kubernetes service type (ClusterIP, NodePort, etc.)
 - `Error` - Error message if scan failed
 
-**Key Features:**
-- **Clean Layout**: One row per IP/port/TLS version for optimal readability
-- **Cipher Suite Lists**: All cipher suites for a TLS version grouped in comma-separated lists
-- **Configurable Columns**: Choose minimal, default, all, or custom column sets
-- **Rich Context**: Includes process names, container info, OpenShift components
-- **Service Integration**: Automatic service-to-IP mapping
-- **TLS Analysis**: Perfect for security compliance and vulnerability analysis
-
 **Example CSV Output (default columns):**
 ```csv
 IP Address,Port,Service,Pod,Namespace,TLS Version,Cipher Suites,Status,Process Name,OpenShift Component
@@ -193,20 +168,7 @@ IP Address,Port,Service,Pod,Namespace,TLS Version,Cipher Suites,Status,Process N
 10.129.0.56,8080,http,my-app,default,N/A,N/A,scanned,httpd,custom-app
 ```
 
-### Console Output (Default)
-Human-readable format showing:
-- Discovered open ports per IP
-- SSL/TLS cipher suites and protocols
-- Service information and mappings
-- OpenShift component details
-- Process and container information
-
 ## OpenShift Integration
-
-### Component Detection
-The scanner automatically identifies OpenShift components by analyzing:
-- Container image references
-- Pod labels and annotations  
 
 ### Required Permissions
 
@@ -224,24 +186,16 @@ The scanner requires these RBAC permissions:
 # SecurityContextConstraints:
 - privileged (for comprehensive scanning)
 ```
+`./deploy.sh` automatically sets these permissions for you.
 
 ## Configuration
 
 ### Environment Variables
 - `KUBECONFIG` - **Required** - Path to kubeconfig file for target cluster
-- `HOME` - User home directory for kubeconfig discovery
-
+  
 ## Troubleshooting
 
 ### Common Issues
-
-**"nmap not found"**
-```bash
-# Install nmap
-brew install nmap  # macOS
-sudo apt install nmap  # Ubuntu/Debian  
-sudo yum install nmap  # RHEL/CentOS
-```
 
 **"Could not create kubernetes client"**
 ```bash
@@ -263,12 +217,15 @@ oc describe project $(oc project -q)
 # May need cluster admin to grant privileged SCC
 ```
 
-## Architecture
 
-### Scanning Workflow
-1. **Discovery**: Enumerate target IPs (single host, file, or cluster pods)
-2. **Port Scanning**: Use nmap to discover open ports per IP
-3. **SSL Analysis**: Run ssl-enum-ciphers on discovered SSL/TLS ports
-4. **Component Analysis**: Extract OpenShift component metadata 
-5. **Process Identification**: Exec into pods to identify listening processes
-6. **Result Aggregation**: Combine all data into structured output
+```mermaid
+graph LR
+    subgraph "Architecture"
+        subgraph "Scanning Workflow"
+            A[1. IP Discovery] --> B[2. Port Scan]
+            B --> C[3. SSL Analysis]
+            C --> D[4. Component Analysis]
+            D --> E[5. Query Process ID]
+            E --> F[6. Aggregate Results]
+        end
+    end
