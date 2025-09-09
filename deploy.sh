@@ -202,7 +202,8 @@ fi
 
 echo "--> Executing the scan in the background inside the pod..."
 # The command is run in the background of the script, but synchronously inside the pod
-oc exec -n "$CURRENT_PROJECT" "$POD_NAME" -- /usr/local/bin/check-network -all-pods -csv /tmp/security-scan-$(date +%Y%m%d).csv -csv-columns all -json /tmp/security-scan-$(date +%Y%m%d).json -j 15 -limit-ips 5
+oc exec -n "$CURRENT_PROJECT" "$POD_NAME" -- /usr/local/bin/check-network -all-pods -csv /tmp/security-scan-$(date +%Y%m%d).csv -csv-columns all -json /tmp/security-scan-$(date +%Y%m%d).json -j 4 -limit-ips 5
+#oc exec -n "$CURRENT_PROJECT" "$POD_NAME" -- /usr/local/bin/check-network -csv /tmp/security-scan-$(date +%Y%m%d).csv -csv-columns all -json /tmp/security-scan-$(date +%Y%m%d).json -j 4 -host 10.128.0.16 -port 17698
 check_error "Executing scan"
 
 print_header "Step 3: Retrieving and Displaying Results"

@@ -7,3 +7,4 @@ api-config-results/
 *pod_ips.txt
 results.json
 small_test.txt
+*.json

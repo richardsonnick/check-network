@@ -452,7 +452,12 @@ func max(a, b int) int {
 }
 
 func (k *K8sClient) getProcessNameFromPod(podName, namespace, containerName string, port int) (string, error) {
-	command := []string{"/bin/sh", "-c", fmt.Sprintf("lsof -i :%d -sTCP:LISTEN -P -n | awk 'NR>1 {print $1}' | head -n 1", port)}
+	// Use lsof -t to get the PID, then read the executable path from /proc. This is the most reliable way to get the
+	// full, untruncated process name, bypassing any truncation issues with lsof's text output.
+	command := []string{"/bin/sh", "-c", fmt.Sprintf(
+		`PID=$(lsof -t -i :%d -sTCP:LISTEN -P -n); if [ -n "$PID" ]; then readlink /proc/$PID/exe; else echo ""; fi`,
+		port,
+	)}
 
 	req := k.clientset.CoreV1().RESTClient().Post().
 		Resource("pods").
@@ -1887,7 +1892,7 @@ func writeCSVOutput(results ScanResults, filename string, columnsSpec string) er
 				}
 				
 				if serviceListensOnPort {
-					podNames = append(podNames, service.Name)
+					podNames = append(podNames, service.Name) # TODO this should be pod name, not service name
 					namespaces = append(namespaces, service.Namespace)
 				}
 			}
