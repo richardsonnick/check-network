@@ -99,23 +99,6 @@ type ScanError struct {
 	Container string `json:"container,omitempty"`
 }
 
-// ProcessDetectionTask represents a task for process detection workers
-type ProcessDetectionTask struct {
-	IP          string
-	Port        int
-	PodName     string
-	Namespace   string
-	Containers  []string
-}
-
-// ProcessDetectionResult represents the result of process detection
-type ProcessDetectionResult struct {
-	IP            string
-	Port          int
-	ProcessName   string
-	ContainerName string
-	Error         *ScanError
-}
 
 type IPResult struct {
 	IP                 string              `json:"ip"`
@@ -501,6 +484,8 @@ func (k *K8sClient) getProcessNameFromPod(podName, namespace, containerName stri
 		return "", fmt.Errorf("exec failed: %v, stderr: %s", err, stderr.String())
 	}
 
+	fmt.Printf("Pre truncated Process name: %s\n", stdout.String())
+
 	processName := strings.TrimSpace(stdout.String())
 	if processName == "" {
 		return "", fmt.Errorf("process not found in container %s for port %d", containerName, port)
@@ -509,59 +494,6 @@ func (k *K8sClient) getProcessNameFromPod(podName, namespace, containerName stri
 	return processName, nil
 }
 
-// processDetectionWorker runs in a separate goroutine to handle process detection without blocking main workers
-func processDetectionWorker(taskChan <-chan ProcessDetectionTask, resultChan chan<- ProcessDetectionResult, k8sClient *K8sClient, workerID int) {
-	log.Printf("Starting Process Detection Worker %d", workerID)
-	
-	for task := range taskChan {
-		log.Printf("Process Worker %d: Detecting process for %s:%d", workerID, task.IP, task.Port)
-		
-		result := ProcessDetectionResult{
-			IP:   task.IP,
-			Port: task.Port,
-		}
-		
-		// Try each container until we find the process
-		processFound := false
-		for _, containerName := range task.Containers {
-			processName, err := k8sClient.getProcessNameFromPod(task.PodName, task.Namespace, containerName, task.Port)
-			if err == nil && processName != "" {
-				result.ProcessName = processName
-				result.ContainerName = containerName
-				processFound = true
-				log.Printf("Process Worker %d: Found process '%s' for %s:%d in container %s", 
-					workerID, processName, task.IP, task.Port, containerName)
-				break
-			} else if err != nil {
-				// Record error but continue trying other containers
-				log.Printf("Process Worker %d: Error detecting process in container %s: %v", workerID, containerName, err)
-				result.Error = &ScanError{
-					IP:        task.IP,
-					Port:      task.Port,
-					ErrorType: "PROCESS_DETECTION_FAILED",
-					ErrorMsg:  err.Error(),
-					PodName:   task.PodName,
-					Namespace: task.Namespace,
-					Container: containerName,
-				}
-			}
-		}
-		
-		if !processFound && len(task.Containers) > 0 {
-			log.Printf("Process Worker %d: Could not detect process for %s:%d in any container", 
-				workerID, task.IP, task.Port)
-		}
-		
-		// Send result back (non-blocking)
-		select {
-		case resultChan <- result:
-		default:
-			log.Printf("Process Worker %d: Result channel full, dropping result for %s:%d", workerID, task.IP, task.Port)
-		}
-	}
-	
-	log.Printf("Process Detection Worker %d: FINISHED", workerID)
-}
 
 // getTLSSecurityProfile collects TLS security profile configurations from OpenShift components
 func (k *K8sClient) getTLSSecurityProfile() (*TLSSecurityProfile, error) {
@@ -1192,7 +1124,7 @@ func discoverOpenPorts(ip string) ([]int, error) {
 	return ports, nil
 }
 
-func scanIPPort(ip string, port int, k8sClient *K8sClient, pod PodInfo, scanResults *ScanResults, processTaskChan chan<- ProcessDetectionTask) (PortResult, error) {
+func scanIPPort(ip string, port int, k8sClient *K8sClient, pod PodInfo, scanResults *ScanResults) (PortResult, error) {
 	log.Printf("Scanning SSL ciphers on %s:%d", ip, port)
 
 	cmd := exec.Command("nmap", "-sV", "--script", "ssl-enum-ciphers", "-p", strconv.Itoa(port), "-oX", "-", ip)
@@ -1249,26 +1181,41 @@ func scanIPPort(ip string, port int, k8sClient *K8sClient, pod PodInfo, scanResu
 		}
 	}
 
-	// Only queue process detection if we found TLS data and have a task channel
-	if k8sClient != nil && hasTLSData && processTaskChan != nil && len(pod.Containers) > 0 {
-		// Queue process detection task (non-blocking)
-		task := ProcessDetectionTask{
-			IP:         ip,
-			Port:       port,
-			PodName:    pod.Name,
-			Namespace:  pod.Namespace,
-			Containers: pod.Containers,
+	// Only do process detection if we found TLS data
+	if k8sClient != nil && hasTLSData && len(pod.Containers) > 0 {
+		// Try each container until we find the process
+		processFound := false
+		for _, containerName := range pod.Containers {
+			processName, err := k8sClient.getProcessNameFromPod(pod.Name, pod.Namespace, containerName, port)
+			if err == nil && processName != "" {
+				result.ProcessName = processName
+				result.ContainerName = containerName
+				processFound = true
+				log.Printf("Found process '%s' for %s:%d in container %s", processName, ip, port, containerName)
+				break
+			} else if err != nil {
+				// Record the process detection error
+				if scanResults != nil {
+					scanError := ScanError{
+						IP:        ip,
+						Port:      port,
+						ErrorType: "PROCESS_DETECTION_FAILED",
+						ErrorMsg:  err.Error(),
+						PodName:   pod.Name,
+						Namespace: pod.Namespace,
+						Container: containerName,
+					}
+					scanResults.ScanErrors = append(scanResults.ScanErrors, scanError)
+				}
+				log.Printf("Process detection failed for %s:%d in container %s: %v", ip, port, containerName, err)
+			}
 		}
 		
-		// Try to queue the task (non-blocking)
-		select {
-		case processTaskChan <- task:
-			log.Printf("Queued process detection for %s:%d", ip, port)
-		default:
-			log.Printf("Process detection queue full, skipping %s:%d", ip, port)
+		if !processFound && len(pod.Containers) > 0 {
+			log.Printf("Could not detect process for %s:%d in any container", ip, port)
 		}
 	} else if !hasTLSData {
-		log.Printf("Skipping process name detection for %s:%d - no TLS data found", ip, port)
+		log.Printf("Skipping process name detection for %s:%d - no TLS data found. Nmap output: %s", ip, port, string(output))
 	}
 
 	return result, nil
@@ -1308,43 +1255,12 @@ func performClusterScan(allPodsInfo []PodInfo, concurrentScans int, k8sClient *K
 		TLSSecurityConfig: tlsConfig,
 	}
 
-	// Create channels for work distribution
+	// Create a channel to send PodInfo to workers
 	podChan := make(chan PodInfo, len(allPodsInfo))
-	processTaskChan := make(chan ProcessDetectionTask, totalIPs*5) // Buffer for multiple ports per IP
-	processResultChan := make(chan ProcessDetectionResult, totalIPs*5) // Buffer for results
 
 	// Use a WaitGroup to wait for all workers to complete
 	var wg sync.WaitGroup
-	var processWg sync.WaitGroup
 	var mu sync.Mutex
-
-	// Start process result collector
-	processResults := make(map[string]ProcessDetectionResult) // Key: "IP:PORT"
-	var processResultWg sync.WaitGroup
-	processResultWg.Add(1)
-	go func() {
-		defer processResultWg.Done()
-		for result := range processResultChan {
-			key := fmt.Sprintf("%s:%d", result.IP, result.Port)
-			processResults[key] = result
-			if result.Error != nil {
-				mu.Lock()
-				results.ScanErrors = append(results.ScanErrors, *result.Error)
-				mu.Unlock()
-			}
-		}
-		log.Printf("Process result collector finished, collected %d results", len(processResults))
-	}()
-
-	// Start process detection workers (separate pool)
-	processWorkerCount := max(2, concurrentScans/2) // Use fewer workers for process detection
-	for w := 0; w < processWorkerCount; w++ {
-		processWg.Add(1)
-		go func(workerID int) {
-			defer processWg.Done()
-			processDetectionWorker(processTaskChan, processResultChan, k8sClient, workerID)
-		}(w + 1)
-	}
 
 	// Start worker goroutines
 	for w := 0; w < concurrentScans; w++ {
@@ -1362,7 +1278,7 @@ func performClusterScan(allPodsInfo []PodInfo, concurrentScans int, k8sClient *K
 				}
 
 				for _, ip := range pod.IPs {
-					ipResult := scanIP(k8sClient, ip, pod, &results, processTaskChan)
+					ipResult := scanIP(k8sClient, ip, pod, &results)
 					ipResult.OpenshiftComponent = component
 
 					mu.Lock()
@@ -1383,31 +1299,8 @@ func performClusterScan(allPodsInfo []PodInfo, concurrentScans int, k8sClient *K
 	}
 	close(podChan)
 
-	// Wait for all main workers to complete
+	// Wait for all workers to complete
 	wg.Wait()
-	
-	// Close process task channel and wait for process workers to finish
-	close(processTaskChan)
-	log.Printf("Waiting for process detection workers to finish...")
-	processWg.Wait()
-	log.Printf("All process detection workers finished")
-	
-	// Close process result channel and wait for result collector to finish
-	close(processResultChan)
-	processResultWg.Wait()
-	
-	// Apply process detection results to the scan results
-	log.Printf("Applying %d process detection results to scan results", len(processResults))
-	for i := range results.IPResults {
-		for j := range results.IPResults[i].PortResults {
-			key := fmt.Sprintf("%s:%d", results.IPResults[i].IP, results.IPResults[i].PortResults[j].Port)
-			if processResult, exists := processResults[key]; exists && processResult.ProcessName != "" {
-				results.IPResults[i].PortResults[j].ProcessName = processResult.ProcessName
-				results.IPResults[i].PortResults[j].ContainerName = processResult.ContainerName
-				log.Printf("Updated process name for %s to '%s' in container '%s'", key, processResult.ProcessName, processResult.ContainerName)
-			}
-		}
-	}
 
 	duration := time.Since(startTime)
 
@@ -1467,7 +1360,7 @@ func performClusterScanWithStreaming(allPodsInfo []PodInfo, outputFile string, c
 				}
 
 				for _, ip := range pod.IPs {
-					ipResult := scanIP(k8sClient, ip, pod, nil, nil) // Pass nil for both streaming and process detection
+					ipResult := scanIP(k8sClient, ip, pod, nil) // Pass nil for streaming - errors won't be collected
 					ipResult.OpenshiftComponent = component
 					resultChan <- ipResult
 				}
@@ -1764,7 +1657,7 @@ func buildPodInfoFromIPs(ips []string, k8sClient *K8sClient) []PodInfo {
 	return infos
 }
 
-func scanIP(k8sClient *K8sClient, ip string, pod PodInfo, scanResults *ScanResults, processTaskChan chan<- ProcessDetectionTask) IPResult {
+func scanIP(k8sClient *K8sClient, ip string, pod PodInfo, scanResults *ScanResults) IPResult {
 	ports, err := discoverOpenPorts(ip)
 	if err != nil {
 		return IPResult{
@@ -1791,7 +1684,7 @@ func scanIP(k8sClient *K8sClient, ip string, pod PodInfo, scanResults *ScanResul
 
 	// Scan each open port for SSL ciphers
 	for _, port := range ports {
-		portResult, err := scanIPPort(ip, port, k8sClient, pod, scanResults, processTaskChan)
+		portResult, err := scanIPPort(ip, port, k8sClient, pod, scanResults)
 		if err != nil {
 			portResult = PortResult{
 				Port:  port,

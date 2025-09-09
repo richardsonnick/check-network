@@ -1,58 +1,13 @@
 {
-  "timestamp": "2025-09-09T15:02:27Z",
+  "timestamp": "2025-09-09T15:21:28Z",
   "total_ips": 5,
   "scanned_ips": 5,
   "ip_results": [
     {
-      "ip": "10.128.0.20",
-      "status": "scanned",
-      "open_ports": null,
-      "port_results": [],
-      "openshift_component": {
-        "component": "openshift-component",
-        "source_location": "quay.io/openshift-release-dev",
-        "maintainer_component": "openshift",
-        "is_bundle": false
-      },
-      "services": [
-        {
-          "name": "metrics",
-          "namespace": "openshift-authentication-operator",
-          "type": "ClusterIP",
-          "ports": [
-            443
-          ]
-        }
-      ]
-    },
-    {
       "ip": "10.128.0.34",
       "status": "scanned",
-      "open_ports": null,
-      "port_results": [],
-      "openshift_component": {
-        "component": "openshift-component",
-        "source_location": "quay.io/openshift-release-dev",
-        "maintainer_component": "openshift",
-        "is_bundle": false
-      },
-      "services": [
-        {
-          "name": "metrics",
-          "namespace": "openshift-apiserver-operator",
-          "type": "ClusterIP",
-          "ports": [
-            443
-          ]
-        }
-      ]
-    },
-    {
-      "ip": "10.128.0.16",
-      "status": "scanned",
       "open_ports": [
-        8443,
-        17698
+        8443
       ],
       "port_results": [
         {
@@ -84,12 +39,90 @@
               }
             ]
           }
+        }
+      ],
+      "openshift_component": {
+        "component": "openshift-component",
+        "source_location": "quay.io/openshift-release-dev",
+        "maintainer_component": "openshift",
+        "is_bundle": false
+      },
+      "services": [
+        {
+          "name": "metrics",
+          "namespace": "openshift-apiserver-operator",
+          "type": "ClusterIP",
+          "ports": [
+            443
+          ]
+        }
+      ]
+    },
+    {
+      "ip": "10.128.0.20",
+      "status": "scanned",
+      "open_ports": null,
+      "port_results": [],
+      "openshift_component": {
+        "component": "openshift-component",
+        "source_location": "quay.io/openshift-release-dev",
+        "maintainer_component": "openshift",
+        "is_bundle": false
+      },
+      "services": [
+        {
+          "name": "metrics",
+          "namespace": "openshift-authentication-operator",
+          "type": "ClusterIP",
+          "ports": [
+            443
+          ]
+        }
+      ]
+    },
+    {
+      "ip": "10.130.0.10",
+      "status": "scanned",
+      "open_ports": [
+        8443,
+        17698
+      ],
+      "port_results": [
+        {
+          "port": 8443,
+          "protocol": "tcp",
+          "state": "filtered",
+          "service": "https-alt",
+          "nmap_details": {
+            "hosts": [
+              {
+                "status": {
+                  "state": "up",
+                  "reason": "echo-reply"
+                },
+                "ports": [
+                  {
+                    "portid": "8443",
+                    "protocol": "tcp",
+                    "state": {
+                      "state": "filtered",
+                      "reason": "no-response"
+                    },
+                    "service": {
+                      "name": "https-alt"
+                    },
+                    "scripts": null
+                  }
+                ]
+              }
+            ]
+          }
         },
         {
           "port": 17698,
           "protocol": "tcp",
-          "state": "open",
-          "service": "unknown",
+          "state": "filtered",
+          "service": "",
           "nmap_details": {
             "hosts": [
               {
@@ -102,321 +135,13 @@
                     "portid": "17698",
                     "protocol": "tcp",
                     "state": {
-                      "state": "open",
-                      "reason": "syn-ack"
+                      "state": "filtered",
+                      "reason": "no-response"
                     },
                     "service": {
-                      "name": "unknown"
+                      "name": ""
                     },
-                    "scripts": [
-                      {
-                        "id": "fingerprint-strings",
-                        "tables": null,
-                        "elems": [
-                          {
-                            "key": "GenericLines, Help, RTSPRequest, SSLSessionReq, TLSSessionReq, TerminalServerCookie",
-                            "value": "\n    HTTP/1.1 400 Bad Request\n    Content-Type: text/plain; charset=utf-8\n    Connection: close\n    Request"
-                          },
-                          {
-                            "key": "GetRequest",
-                            "value": "\n    HTTP/1.0 403 Forbidden\n    Audit-Id: 3c6bbe26-3084-4328-9f03-644412dfa664\n    Cache-Control: no-cache, private\n    Content-Type: application/json\n    X-Content-Type-Options: nosniff\n    Date: Tue, 09 Sep 2025 15:03:13 GMT\n    Content-Length: 185\n    {\"kind\":\"Status\",\"apiVersion\":\"v1\",\"metadata\":{},\"status\":\"Failure\",\"message\":\"forbidden: User \"system:anonymous\" cannot get path \"/\"\",\"reason\":\"Forbidden\",\"details\":{},\"code\":403}"
-                          },
-                          {
-                            "key": "HTTPOptions",
-                            "value": "\n    HTTP/1.0 403 Forbidden\n    Audit-Id: 7285e4cd-8d2b-4eec-b948-0a9366cc72a8\n    Cache-Control: no-cache, private\n    Content-Type: application/json\n    X-Content-Type-Options: nosniff\n    Date: Tue, 09 Sep 2025 15:03:13 GMT\n    Content-Length: 189\n    {\"kind\":\"Status\",\"apiVersion\":\"v1\",\"metadata\":{},\"status\":\"Failure\",\"message\":\"forbidden: User \"system:anonymous\" cannot options path \"/\"\",\"reason\":\"Forbidden\",\"details\":{},\"code\":403}"
-                          }
-                        ]
-                      },
-                      {
-                        "id": "ssl-enum-ciphers",
-                        "tables": [
-                          {
-                            "key": "TLSv1.2",
-                            "tables": [
-                              {
-                                "key": "ciphers",
-                                "tables": [
-                                  {
-                                    "key": "",
-                                    "tables": null,
-                                    "elems": [
-                                      {
-                                        "key": "name",
-                                        "value": "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256"
-                                      },
-                                      {
-                                        "key": "strength",
-                                        "value": "A"
-                                      },
-                                      {
-                                        "key": "kex_info",
-                                        "value": "secp256r1"
-                                      }
-                                    ]
-                                  },
-                                  {
-                                    "key": "",
-                                    "tables": null,
-                                    "elems": [
-                                      {
-                                        "key": "name",
-                                        "value": "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256"
-                                      },
-                                      {
-                                        "key": "strength",
-                                        "value": "A"
-                                      },
-                                      {
-                                        "key": "kex_info",
-                                        "value": "secp256r1"
-                                      }
-                                    ]
-                                  },
-                                  {
-                                    "key": "",
-                                    "tables": null,
-                                    "elems": [
-                                      {
-                                        "key": "name",
-                                        "value": "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384"
-                                      },
-                                      {
-                                        "key": "strength",
-                                        "value": "A"
-                                      },
-                                      {
-                                        "key": "kex_info",
-                                        "value": "secp256r1"
-                                      }
-                                    ]
-                                  },
-                                  {
-                                    "key": "",
-                                    "tables": null,
-                                    "elems": [
-                                      {
-                                        "key": "name",
-                                        "value": "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA"
-                                      },
-                                      {
-                                        "key": "strength",
-                                        "value": "A"
-                                      },
-                                      {
-                                        "key": "kex_info",
-                                        "value": "secp256r1"
-                                      }
-                                    ]
-                                  },
-                                  {
-                                    "key": "",
-                                    "tables": null,
-                                    "elems": [
-                                      {
-                                        "key": "name",
-                                        "value": "TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA"
-                                      },
-                                      {
-                                        "key": "strength",
-                                        "value": "A"
-                                      },
-                                      {
-                                        "key": "kex_info",
-                                        "value": "secp256r1"
-                                      }
-                                    ]
-                                  },
-                                  {
-                                    "key": "",
-                                    "tables": null,
-                                    "elems": [
-                                      {
-                                        "key": "name",
-                                        "value": "TLS_RSA_WITH_AES_128_GCM_SHA256"
-                                      },
-                                      {
-                                        "key": "strength",
-                                        "value": "A"
-                                      },
-                                      {
-                                        "key": "kex_info",
-                                        "value": "rsa 2048"
-                                      }
-                                    ]
-                                  },
-                                  {
-                                    "key": "",
-                                    "tables": null,
-                                    "elems": [
-                                      {
-                                        "key": "name",
-                                        "value": "TLS_RSA_WITH_AES_256_GCM_SHA384"
-                                      },
-                                      {
-                                        "key": "strength",
-                                        "value": "A"
-                                      },
-                                      {
-                                        "key": "kex_info",
-                                        "value": "rsa 2048"
-                                      }
-                                    ]
-                                  },
-                                  {
-                                    "key": "",
-                                    "tables": null,
-                                    "elems": [
-                                      {
-                                        "key": "name",
-                                        "value": "TLS_RSA_WITH_AES_128_CBC_SHA"
-                                      },
-                                      {
-                                        "key": "strength",
-                                        "value": "A"
-                                      },
-                                      {
-                                        "key": "kex_info",
-                                        "value": "rsa 2048"
-                                      }
-                                    ]
-                                  },
-                                  {
-                                    "key": "",
-                                    "tables": null,
-                                    "elems": [
-                                      {
-                                        "key": "name",
-                                        "value": "TLS_RSA_WITH_AES_256_CBC_SHA"
-                                      },
-                                      {
-                                        "key": "strength",
-                                        "value": "A"
-                                      },
-                                      {
-                                        "key": "kex_info",
-                                        "value": "rsa 2048"
-                                      }
-                                    ]
-                                  },
-                                  {
-                                    "key": "",
-                                    "tables": null,
-                                    "elems": [
-                                      {
-                                        "key": "name",
-                                        "value": "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256"
-                                      },
-                                      {
-                                        "key": "strength",
-                                        "value": "A"
-                                      },
-                                      {
-                                        "key": "kex_info",
-                                        "value": "secp256r1"
-                                      }
-                                    ]
-                                  }
-                                ],
-                                "elems": null
-                              },
-                              {
-                                "key": "compressors",
-                                "tables": null,
-                                "elems": [
-                                  {
-                                    "key": "",
-                                    "value": "NULL"
-                                  }
-                                ]
-                              }
-                            ],
-                            "elems": [
-                              {
-                                "key": "cipher preference",
-                                "value": "server"
-                              }
-                            ]
-                          },
-                          {
-                            "key": "TLSv1.3",
-                            "tables": [
-                              {
-                                "key": "ciphers",
-                                "tables": [
-                                  {
-                                    "key": "",
-                                    "tables": null,
-                                    "elems": [
-                                      {
-                                        "key": "name",
-                                        "value": "TLS_AKE_WITH_AES_128_GCM_SHA256"
-                                      },
-                                      {
-                                        "key": "strength",
-                                        "value": "A"
-                                      },
-                                      {
-                                        "key": "kex_info",
-                                        "value": "ecdh_x25519"
-                                      }
-                                    ]
-                                  },
-                                  {
-                                    "key": "",
-                                    "tables": null,
-                                    "elems": [
-                                      {
-                                        "key": "name",
-                                        "value": "TLS_AKE_WITH_AES_256_GCM_SHA384"
-                                      },
-                                      {
-                                        "key": "strength",
-                                        "value": "A"
-                                      },
-                                      {
-                                        "key": "kex_info",
-                                        "value": "ecdh_x25519"
-                                      }
-                                    ]
-                                  },
-                                  {
-                                    "key": "",
-                                    "tables": null,
-                                    "elems": [
-                                      {
-                                        "key": "name",
-                                        "value": "TLS_AKE_WITH_CHACHA20_POLY1305_SHA256"
-                                      },
-                                      {
-                                        "key": "strength",
-                                        "value": "A"
-                                      },
-                                      {
-                                        "key": "kex_info",
-                                        "value": "ecdh_x25519"
-                                      }
-                                    ]
-                                  }
-                                ],
-                                "elems": null
-                              }
-                            ],
-                            "elems": [
-                              {
-                                "key": "cipher preference",
-                                "value": "server"
-                              }
-                            ]
-                          }
-                        ],
-                        "elems": [
-                          {
-                            "key": "least strength",
-                            "value": "A"
-                          }
-                        ]
-                      }
-                    ]
+                    "scripts": null
                   }
                 ]
               }
@@ -452,485 +177,8 @@
     {
       "ip": "10.129.0.12",
       "status": "scanned",
-      "open_ports": [
-        8443,
-        17698
-      ],
-      "port_results": [
-        {
-          "port": 8443,
-          "protocol": "tcp",
-          "state": "open",
-          "service": "https-alt",
-          "nmap_details": {
-            "hosts": [
-              {
-                "status": {
-                  "state": "up",
-                  "reason": "echo-reply"
-                },
-                "ports": [
-                  {
-                    "portid": "8443",
-                    "protocol": "tcp",
-                    "state": {
-                      "state": "open",
-                      "reason": "syn-ack"
-                    },
-                    "service": {
-                      "name": "https-alt"
-                    },
-                    "scripts": [
-                      {
-                        "id": "fingerprint-strings",
-                        "tables": null,
-                        "elems": [
-                          {
-                            "key": "FourOhFourRequest",
-                            "value": "\n    HTTP/1.0 403 Forbidden\n    Audit-Id: f9fdec52-a934-428c-a19a-ca1b850c7c0d\n    Cache-Control: no-store\n    Content-Type: application/json\n    X-Content-Type-Options: nosniff\n    Date: Tue, 09 Sep 2025 15:03:09 GMT\n    Content-Length: 212\n    {\"kind\":\"Status\",\"apiVersion\":\"v1\",\"metadata\":{},\"status\":\"Failure\",\"message\":\"forbidden: User \"system:anonymous\" cannot get path \"/nice ports,/Trinity.txt.bak\"\",\"reason\":\"Forbidden\",\"details\":{},\"code\":403}"
-                          },
-                          {
-                            "key": "GenericLines, Help, RTSPRequest",
-                            "value": "\n    HTTP/1.1 400 Bad Request\n    Content-Type: text/plain; charset=utf-8\n    Connection: close\n    Request"
-                          },
-                          {
-                            "key": "GetRequest",
-                            "value": "\n    HTTP/1.0 403 Forbidden\n    Audit-Id: d677905e-4259-4b18-9663-c15821cb6217\n    Cache-Control: no-store\n    Content-Type: application/json\n    X-Content-Type-Options: nosniff\n    Date: Tue, 09 Sep 2025 15:03:09 GMT\n    Content-Length: 185\n    {\"kind\":\"Status\",\"apiVersion\":\"v1\",\"metadata\":{},\"status\":\"Failure\",\"message\":\"forbidden: User \"system:anonymous\" cannot get path \"/\"\",\"reason\":\"Forbidden\",\"details\":{},\"code\":403}"
-                          },
-                          {
-                            "key": "HTTPOptions",
-                            "value": "\n    HTTP/1.0 403 Forbidden\n    Audit-Id: 1141ac58-ed44-4553-a187-1f3eb317e5a7\n    Cache-Control: no-store\n    Content-Type: application/json\n    X-Content-Type-Options: nosniff\n    Date: Tue, 09 Sep 2025 15:03:09 GMT\n    Content-Length: 189\n    {\"kind\":\"Status\",\"apiVersion\":\"v1\",\"metadata\":{},\"status\":\"Failure\",\"message\":\"forbidden: User \"system:anonymous\" cannot options path \"/\"\",\"reason\":\"Forbidden\",\"details\":{},\"code\":403}"
-                          }
-                        ]
-                      },
-                      {
-                        "id": "ssl-enum-ciphers",
-                        "tables": [
-                          {
-                            "key": "TLSv1.3",
-                            "tables": [
-                              {
-                                "key": "ciphers",
-                                "tables": [
-                                  {
-                                    "key": "",
-                                    "tables": null,
-                                    "elems": [
-                                      {
-                                        "key": "kex_info",
-                                        "value": "ecdh_x25519"
-                                      },
-                                      {
-                                        "key": "name",
-                                        "value": "TLS_AKE_WITH_AES_128_GCM_SHA256"
-                                      },
-                                      {
-                                        "key": "strength",
-                                        "value": "A"
-                                      }
-                                    ]
-                                  },
-                                  {
-                                    "key": "",
-                                    "tables": null,
-                                    "elems": [
-                                      {
-                                        "key": "kex_info",
-                                        "value": "ecdh_x25519"
-                                      },
-                                      {
-                                        "key": "name",
-                                        "value": "TLS_AKE_WITH_AES_256_GCM_SHA384"
-                                      },
-                                      {
-                                        "key": "strength",
-                                        "value": "A"
-                                      }
-                                    ]
-                                  },
-                                  {
-                                    "key": "",
-                                    "tables": null,
-                                    "elems": [
-                                      {
-                                        "key": "kex_info",
-                                        "value": "ecdh_x25519"
-                                      },
-                                      {
-                                        "key": "name",
-                                        "value": "TLS_AKE_WITH_CHACHA20_POLY1305_SHA256"
-                                      },
-                                      {
-                                        "key": "strength",
-                                        "value": "A"
-                                      }
-                                    ]
-                                  }
-                                ],
-                                "elems": null
-                              }
-                            ],
-                            "elems": [
-                              {
-                                "key": "cipher preference",
-                                "value": "server"
-                              }
-                            ]
-                          }
-                        ],
-                        "elems": [
-                          {
-                            "key": "least strength",
-                            "value": "A"
-                          }
-                        ]
-                      }
-                    ]
-                  }
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "port": 17698,
-          "protocol": "tcp",
-          "state": "open",
-          "service": "unknown",
-          "nmap_details": {
-            "hosts": [
-              {
-                "status": {
-                  "state": "up",
-                  "reason": "reset"
-                },
-                "ports": [
-                  {
-                    "portid": "17698",
-                    "protocol": "tcp",
-                    "state": {
-                      "state": "open",
-                      "reason": "syn-ack"
-                    },
-                    "service": {
-                      "name": "unknown"
-                    },
-                    "scripts": [
-                      {
-                        "id": "fingerprint-strings",
-                        "tables": null,
-                        "elems": [
-                          {
-                            "key": "GenericLines, Help, RTSPRequest, SSLSessionReq, TLSSessionReq, TerminalServerCookie",
-                            "value": "\n    HTTP/1.1 400 Bad Request\n    Content-Type: text/plain; charset=utf-8\n    Connection: close\n    Request"
-                          },
-                          {
-                            "key": "GetRequest",
-                            "value": "\n    HTTP/1.0 403 Forbidden\n    Audit-Id: 50028ce1-7b08-45e8-914f-e4d030e96424\n    Cache-Control: no-cache, private\n    Content-Type: application/json\n    X-Content-Type-Options: nosniff\n    Date: Tue, 09 Sep 2025 15:04:47 GMT\n    Content-Length: 185\n    {\"kind\":\"Status\",\"apiVersion\":\"v1\",\"metadata\":{},\"status\":\"Failure\",\"message\":\"forbidden: User \"system:anonymous\" cannot get path \"/\"\",\"reason\":\"Forbidden\",\"details\":{},\"code\":403}"
-                          },
-                          {
-                            "key": "HTTPOptions",
-                            "value": "\n    HTTP/1.0 403 Forbidden\n    Audit-Id: 40ebbc18-507d-41ba-a64a-34b2df7c9385\n    Cache-Control: no-cache, private\n    Content-Type: application/json\n    X-Content-Type-Options: nosniff\n    Date: Tue, 09 Sep 2025 15:04:47 GMT\n    Content-Length: 189\n    {\"kind\":\"Status\",\"apiVersion\":\"v1\",\"metadata\":{},\"status\":\"Failure\",\"message\":\"forbidden: User \"system:anonymous\" cannot options path \"/\"\",\"reason\":\"Forbidden\",\"details\":{},\"code\":403}"
-                          }
-                        ]
-                      },
-                      {
-                        "id": "ssl-enum-ciphers",
-                        "tables": [
-                          {
-                            "key": "TLSv1.2",
-                            "tables": [
-                              {
-                                "key": "ciphers",
-                                "tables": [
-                                  {
-                                    "key": "",
-                                    "tables": null,
-                                    "elems": [
-                                      {
-                                        "key": "name",
-                                        "value": "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256"
-                                      },
-                                      {
-                                        "key": "kex_info",
-                                        "value": "secp256r1"
-                                      },
-                                      {
-                                        "key": "strength",
-                                        "value": "A"
-                                      }
-                                    ]
-                                  },
-                                  {
-                                    "key": "",
-                                    "tables": null,
-                                    "elems": [
-                                      {
-                                        "key": "name",
-                                        "value": "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256"
-                                      },
-                                      {
-                                        "key": "kex_info",
-                                        "value": "secp256r1"
-                                      },
-                                      {
-                                        "key": "strength",
-                                        "value": "A"
-                                      }
-                                    ]
-                                  },
-                                  {
-                                    "key": "",
-                                    "tables": null,
-                                    "elems": [
-                                      {
-                                        "key": "name",
-                                        "value": "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384"
-                                      },
-                                      {
-                                        "key": "kex_info",
-                                        "value": "secp256r1"
-                                      },
-                                      {
-                                        "key": "strength",
-                                        "value": "A"
-                                      }
-                                    ]
-                                  },
-                                  {
-                                    "key": "",
-                                    "tables": null,
-                                    "elems": [
-                                      {
-                                        "key": "name",
-                                        "value": "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA"
-                                      },
-                                      {
-                                        "key": "kex_info",
-                                        "value": "secp256r1"
-                                      },
-                                      {
-                                        "key": "strength",
-                                        "value": "A"
-                                      }
-                                    ]
-                                  },
-                                  {
-                                    "key": "",
-                                    "tables": null,
-                                    "elems": [
-                                      {
-                                        "key": "name",
-                                        "value": "TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA"
-                                      },
-                                      {
-                                        "key": "kex_info",
-                                        "value": "secp256r1"
-                                      },
-                                      {
-                                        "key": "strength",
-                                        "value": "A"
-                                      }
-                                    ]
-                                  },
-                                  {
-                                    "key": "",
-                                    "tables": null,
-                                    "elems": [
-                                      {
-                                        "key": "name",
-                                        "value": "TLS_RSA_WITH_AES_128_GCM_SHA256"
-                                      },
-                                      {
-                                        "key": "kex_info",
-                                        "value": "rsa 2048"
-                                      },
-                                      {
-                                        "key": "strength",
-                                        "value": "A"
-                                      }
-                                    ]
-                                  },
-                                  {
-                                    "key": "",
-                                    "tables": null,
-                                    "elems": [
-                                      {
-                                        "key": "name",
-                                        "value": "TLS_RSA_WITH_AES_256_GCM_SHA384"
-                                      },
-                                      {
-                                        "key": "kex_info",
-                                        "value": "rsa 2048"
-                                      },
-                                      {
-                                        "key": "strength",
-                                        "value": "A"
-                                      }
-                                    ]
-                                  },
-                                  {
-                                    "key": "",
-                                    "tables": null,
-                                    "elems": [
-                                      {
-                                        "key": "name",
-                                        "value": "TLS_RSA_WITH_AES_128_CBC_SHA"
-                                      },
-                                      {
-                                        "key": "kex_info",
-                                        "value": "rsa 2048"
-                                      },
-                                      {
-                                        "key": "strength",
-                                        "value": "A"
-                                      }
-                                    ]
-                                  },
-                                  {
-                                    "key": "",
-                                    "tables": null,
-                                    "elems": [
-                                      {
-                                        "key": "name",
-                                        "value": "TLS_RSA_WITH_AES_256_CBC_SHA"
-                                      },
-                                      {
-                                        "key": "kex_info",
-                                        "value": "rsa 2048"
-                                      },
-                                      {
-                                        "key": "strength",
-                                        "value": "A"
-                                      }
-                                    ]
-                                  },
-                                  {
-                                    "key": "",
-                                    "tables": null,
-                                    "elems": [
-                                      {
-                                        "key": "name",
-                                        "value": "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256"
-                                      },
-                                      {
-                                        "key": "kex_info",
-                                        "value": "secp256r1"
-                                      },
-                                      {
-                                        "key": "strength",
-                                        "value": "A"
-                                      }
-                                    ]
-                                  }
-                                ],
-                                "elems": null
-                              },
-                              {
-                                "key": "compressors",
-                                "tables": null,
-                                "elems": [
-                                  {
-                                    "key": "",
-                                    "value": "NULL"
-                                  }
-                                ]
-                              }
-                            ],
-                            "elems": [
-                              {
-                                "key": "cipher preference",
-                                "value": "server"
-                              }
-                            ]
-                          },
-                          {
-                            "key": "TLSv1.3",
-                            "tables": [
-                              {
-                                "key": "ciphers",
-                                "tables": [
-                                  {
-                                    "key": "",
-                                    "tables": null,
-                                    "elems": [
-                                      {
-                                        "key": "name",
-                                        "value": "TLS_AKE_WITH_AES_128_GCM_SHA256"
-                                      },
-                                      {
-                                        "key": "kex_info",
-                                        "value": "ecdh_x25519"
-                                      },
-                                      {
-                                        "key": "strength",
-                                        "value": "A"
-                                      }
-                                    ]
-                                  },
-                                  {
-                                    "key": "",
-                                    "tables": null,
-                                    "elems": [
-                                      {
-                                        "key": "name",
-                                        "value": "TLS_AKE_WITH_AES_256_GCM_SHA384"
-                                      },
-                                      {
-                                        "key": "kex_info",
-                                        "value": "ecdh_x25519"
-                                      },
-                                      {
-                                        "key": "strength",
-                                        "value": "A"
-                                      }
-                                    ]
-                                  },
-                                  {
-                                    "key": "",
-                                    "tables": null,
-                                    "elems": [
-                                      {
-                                        "key": "name",
-                                        "value": "TLS_AKE_WITH_CHACHA20_POLY1305_SHA256"
-                                      },
-                                      {
-                                        "key": "kex_info",
-                                        "value": "ecdh_x25519"
-                                      },
-                                      {
-                                        "key": "strength",
-                                        "value": "A"
-                                      }
-                                    ]
-                                  }
-                                ],
-                                "elems": null
-                              }
-                            ],
-                            "elems": [
-                              {
-                                "key": "cipher preference",
-                                "value": "server"
-                              }
-                            ]
-                          }
-                        ],
-                        "elems": [
-                          {
-                            "key": "least strength",
-                            "value": "A"
-                          }
-                        ]
-                      }
-                    ]
-                  }
-                ]
-              }
-            ]
-          }
-        }
-      ],
+      "open_ports": null,
+      "port_results": [],
       "openshift_component": {
         "component": "openshift-component",
         "source_location": "quay.io/openshift-release-dev",
@@ -957,153 +205,19 @@
       ]
     },
     {
-      "ip": "10.130.0.10",
+      "ip": "10.128.0.16",
       "status": "scanned",
       "open_ports": [
-        8443,
         17698
       ],
       "port_results": [
-        {
-          "port": 8443,
-          "protocol": "tcp",
-          "state": "open",
-          "service": "https-alt",
-          "nmap_details": {
-            "hosts": [
-              {
-                "status": {
-                  "state": "up",
-                  "reason": "reset"
-                },
-                "ports": [
-                  {
-                    "portid": "8443",
-                    "protocol": "tcp",
-                    "state": {
-                      "state": "open",
-                      "reason": "syn-ack"
-                    },
-                    "service": {
-                      "name": "https-alt"
-                    },
-                    "scripts": [
-                      {
-                        "id": "fingerprint-strings",
-                        "tables": null,
-                        "elems": [
-                          {
-                            "key": "FourOhFourRequest",
-                            "value": "\n    HTTP/1.0 403 Forbidden\n    Audit-Id: 0f97ea6f-1229-4730-b50d-83709a0244b4\n    Cache-Control: no-store\n    Content-Type: application/json\n    X-Content-Type-Options: nosniff\n    Date: Tue, 09 Sep 2025 15:03:10 GMT\n    Content-Length: 212\n    {\"kind\":\"Status\",\"apiVersion\":\"v1\",\"metadata\":{},\"status\":\"Failure\",\"message\":\"forbidden: User \"system:anonymous\" cannot get path \"/nice ports,/Trinity.txt.bak\"\",\"reason\":\"Forbidden\",\"details\":{},\"code\":403}"
-                          },
-                          {
-                            "key": "GenericLines, Help, RTSPRequest",
-                            "value": "\n    HTTP/1.1 400 Bad Request\n    Content-Type: text/plain; charset=utf-8\n    Connection: close\n    Request"
-                          },
-                          {
-                            "key": "GetRequest",
-                            "value": "\n    HTTP/1.0 403 Forbidden\n    Audit-Id: f4907370-6bb4-4c65-9980-1e07f35c1448\n    Cache-Control: no-store\n    Content-Type: application/json\n    X-Content-Type-Options: nosniff\n    Date: Tue, 09 Sep 2025 15:03:10 GMT\n    Content-Length: 185\n    {\"kind\":\"Status\",\"apiVersion\":\"v1\",\"metadata\":{},\"status\":\"Failure\",\"message\":\"forbidden: User \"system:anonymous\" cannot get path \"/\"\",\"reason\":\"Forbidden\",\"details\":{},\"code\":403}"
-                          },
-                          {
-                            "key": "HTTPOptions",
-                            "value": "\n    HTTP/1.0 403 Forbidden\n    Audit-Id: 7b9c11d5-ce39-45dd-b4f2-b55806f2056e\n    Cache-Control: no-store\n    Content-Type: application/json\n    X-Content-Type-Options: nosniff\n    Date: Tue, 09 Sep 2025 15:03:10 GMT\n    Content-Length: 189\n    {\"kind\":\"Status\",\"apiVersion\":\"v1\",\"metadata\":{},\"status\":\"Failure\",\"message\":\"forbidden: User \"system:anonymous\" cannot options path \"/\"\",\"reason\":\"Forbidden\",\"details\":{},\"code\":403}"
-                          }
-                        ]
-                      },
-                      {
-                        "id": "ssl-enum-ciphers",
-                        "tables": [
-                          {
-                            "key": "TLSv1.3",
-                            "tables": [
-                              {
-                                "key": "ciphers",
-                                "tables": [
-                                  {
-                                    "key": "",
-                                    "tables": null,
-                                    "elems": [
-                                      {
-                                        "key": "strength",
-                                        "value": "A"
-                                      },
-                                      {
-                                        "key": "kex_info",
-                                        "value": "ecdh_x25519"
-                                      },
-                                      {
-                                        "key": "name",
-                                        "value": "TLS_AKE_WITH_AES_128_GCM_SHA256"
-                                      }
-                                    ]
-                                  },
-                                  {
-                                    "key": "",
-                                    "tables": null,
-                                    "elems": [
-                                      {
-                                        "key": "strength",
-                                        "value": "A"
-                                      },
-                                      {
-                                        "key": "kex_info",
-                                        "value": "ecdh_x25519"
-                                      },
-                                      {
-                                        "key": "name",
-                                        "value": "TLS_AKE_WITH_AES_256_GCM_SHA384"
-                                      }
-                                    ]
-                                  },
-                                  {
-                                    "key": "",
-                                    "tables": null,
-                                    "elems": [
-                                      {
-                                        "key": "strength",
-                                        "value": "A"
-                                      },
-                                      {
-                                        "key": "kex_info",
-                                        "value": "ecdh_x25519"
-                                      },
-                                      {
-                                        "key": "name",
-                                        "value": "TLS_AKE_WITH_CHACHA20_POLY1305_SHA256"
-                                      }
-                                    ]
-                                  }
-                                ],
-                                "elems": null
-                              }
-                            ],
-                            "elems": [
-                              {
-                                "key": "cipher preference",
-                                "value": "server"
-                              }
-                            ]
-                          }
-                        ],
-                        "elems": [
-                          {
-                            "key": "least strength",
-                            "value": "A"
-                          }
-                        ]
-                      }
-                    ]
-                  }
-                ]
-              }
-            ]
-          }
-        },
         {
           "port": 17698,
           "protocol": "tcp",
           "state": "open",
           "service": "unknown",
+          "process_name": "cluster-k",
+          "container_name": "openshift-apiserver-check-endpoints",
           "nmap_details": {
             "hosts": [
               {
@@ -1133,11 +247,11 @@
                           },
                           {
                             "key": "GetRequest",
-                            "value": "\n    HTTP/1.0 403 Forbidden\n    Audit-Id: d970d416-fbf0-478c-9d6b-4d6d975a19e1\n    Cache-Control: no-cache, private\n    Content-Type: application/json\n    X-Content-Type-Options: nosniff\n    Date: Tue, 09 Sep 2025 15:04:48 GMT\n    Content-Length: 185\n    {\"kind\":\"Status\",\"apiVersion\":\"v1\",\"metadata\":{},\"status\":\"Failure\",\"message\":\"forbidden: User \"system:anonymous\" cannot get path \"/\"\",\"reason\":\"Forbidden\",\"details\":{},\"code\":403}"
+                            "value": "\n    HTTP/1.0 403 Forbidden\n    Audit-Id: 027e5f22-c812-4aa4-b317-553344920634\n    Cache-Control: no-cache, private\n    Content-Type: application/json\n    X-Content-Type-Options: nosniff\n    Date: Tue, 09 Sep 2025 15:22:01 GMT\n    Content-Length: 185\n    {\"kind\":\"Status\",\"apiVersion\":\"v1\",\"metadata\":{},\"status\":\"Failure\",\"message\":\"forbidden: User \"system:anonymous\" cannot get path \"/\"\",\"reason\":\"Forbidden\",\"details\":{},\"code\":403}"
                           },
                           {
                             "key": "HTTPOptions",
-                            "value": "\n    HTTP/1.0 403 Forbidden\n    Audit-Id: 8ec66d44-c5e8-4938-be20-1e60cca704e5\n    Cache-Control: no-cache, private\n    Content-Type: application/json\n    X-Content-Type-Options: nosniff\n    Date: Tue, 09 Sep 2025 15:04:48 GMT\n    Content-Length: 189\n    {\"kind\":\"Status\",\"apiVersion\":\"v1\",\"metadata\":{},\"status\":\"Failure\",\"message\":\"forbidden: User \"system:anonymous\" cannot options path \"/\"\",\"reason\":\"Forbidden\",\"details\":{},\"code\":403}"
+                            "value": "\n    HTTP/1.0 403 Forbidden\n    Audit-Id: a7bbbc74-f086-4724-95be-fa8f2be782f7\n    Cache-Control: no-cache, private\n    Content-Type: application/json\n    X-Content-Type-Options: nosniff\n    Date: Tue, 09 Sep 2025 15:22:01 GMT\n    Content-Length: 189\n    {\"kind\":\"Status\",\"apiVersion\":\"v1\",\"metadata\":{},\"status\":\"Failure\",\"message\":\"forbidden: User \"system:anonymous\" cannot options path \"/\"\",\"reason\":\"Forbidden\",\"details\":{},\"code\":403}"
                           }
                         ]
                       },
@@ -1155,16 +269,16 @@
                                     "tables": null,
                                     "elems": [
                                       {
-                                        "key": "name",
-                                        "value": "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256"
-                                      },
-                                      {
                                         "key": "kex_info",
                                         "value": "secp256r1"
                                       },
                                       {
                                         "key": "strength",
                                         "value": "A"
+                                      },
+                                      {
+                                        "key": "name",
+                                        "value": "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256"
                                       }
                                     ]
                                   },
@@ -1172,17 +286,17 @@
                                     "key": "",
                                     "tables": null,
                                     "elems": [
+                                      {
+                                        "key": "kex_info",
+                                        "value": "secp256r1"
+                                      },
+                                      {
+                                        "key": "strength",
+                                        "value": "A"
+                                      },
                                       {
                                         "key": "name",
                                         "value": "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256"
-                                      },
-                                      {
-                                        "key": "kex_info",
-                                        "value": "secp256r1"
-                                      },
-                                      {
-                                        "key": "strength",
-                                        "value": "A"
                                       }
                                     ]
                                   },
@@ -1190,17 +304,17 @@
                                     "key": "",
                                     "tables": null,
                                     "elems": [
+                                      {
+                                        "key": "kex_info",
+                                        "value": "secp256r1"
+                                      },
+                                      {
+                                        "key": "strength",
+                                        "value": "A"
+                                      },
                                       {
                                         "key": "name",
                                         "value": "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384"
-                                      },
-                                      {
-                                        "key": "kex_info",
-                                        "value": "secp256r1"
-                                      },
-                                      {
-                                        "key": "strength",
-                                        "value": "A"
                                       }
                                     ]
                                   },
@@ -1208,17 +322,17 @@
                                     "key": "",
                                     "tables": null,
                                     "elems": [
+                                      {
+                                        "key": "kex_info",
+                                        "value": "secp256r1"
+                                      },
+                                      {
+                                        "key": "strength",
+                                        "value": "A"
+                                      },
                                       {
                                         "key": "name",
                                         "value": "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA"
-                                      },
-                                      {
-                                        "key": "kex_info",
-                                        "value": "secp256r1"
-                                      },
-                                      {
-                                        "key": "strength",
-                                        "value": "A"
                                       }
                                     ]
                                   },
@@ -1226,17 +340,17 @@
                                     "key": "",
                                     "tables": null,
                                     "elems": [
+                                      {
+                                        "key": "kex_info",
+                                        "value": "secp256r1"
+                                      },
+                                      {
+                                        "key": "strength",
+                                        "value": "A"
+                                      },
                                       {
                                         "key": "name",
                                         "value": "TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA"
-                                      },
-                                      {
-                                        "key": "kex_info",
-                                        "value": "secp256r1"
-                                      },
-                                      {
-                                        "key": "strength",
-                                        "value": "A"
                                       }
                                     ]
                                   },
@@ -1244,17 +358,17 @@
                                     "key": "",
                                     "tables": null,
                                     "elems": [
+                                      {
+                                        "key": "kex_info",
+                                        "value": "rsa 2048"
+                                      },
+                                      {
+                                        "key": "strength",
+                                        "value": "A"
+                                      },
                                       {
                                         "key": "name",
                                         "value": "TLS_RSA_WITH_AES_128_GCM_SHA256"
-                                      },
-                                      {
-                                        "key": "kex_info",
-                                        "value": "rsa 2048"
-                                      },
-                                      {
-                                        "key": "strength",
-                                        "value": "A"
                                       }
                                     ]
                                   },
@@ -1262,17 +376,17 @@
                                     "key": "",
                                     "tables": null,
                                     "elems": [
+                                      {
+                                        "key": "kex_info",
+                                        "value": "rsa 2048"
+                                      },
+                                      {
+                                        "key": "strength",
+                                        "value": "A"
+                                      },
                                       {
                                         "key": "name",
                                         "value": "TLS_RSA_WITH_AES_256_GCM_SHA384"
-                                      },
-                                      {
-                                        "key": "kex_info",
-                                        "value": "rsa 2048"
-                                      },
-                                      {
-                                        "key": "strength",
-                                        "value": "A"
                                       }
                                     ]
                                   },
@@ -1280,17 +394,17 @@
                                     "key": "",
                                     "tables": null,
                                     "elems": [
+                                      {
+                                        "key": "kex_info",
+                                        "value": "rsa 2048"
+                                      },
+                                      {
+                                        "key": "strength",
+                                        "value": "A"
+                                      },
                                       {
                                         "key": "name",
                                         "value": "TLS_RSA_WITH_AES_128_CBC_SHA"
-                                      },
-                                      {
-                                        "key": "kex_info",
-                                        "value": "rsa 2048"
-                                      },
-                                      {
-                                        "key": "strength",
-                                        "value": "A"
                                       }
                                     ]
                                   },
@@ -1298,17 +412,17 @@
                                     "key": "",
                                     "tables": null,
                                     "elems": [
+                                      {
+                                        "key": "kex_info",
+                                        "value": "rsa 2048"
+                                      },
+                                      {
+                                        "key": "strength",
+                                        "value": "A"
+                                      },
                                       {
                                         "key": "name",
                                         "value": "TLS_RSA_WITH_AES_256_CBC_SHA"
-                                      },
-                                      {
-                                        "key": "kex_info",
-                                        "value": "rsa 2048"
-                                      },
-                                      {
-                                        "key": "strength",
-                                        "value": "A"
                                       }
                                     ]
                                   },
@@ -1316,10 +430,6 @@
                                     "key": "",
                                     "tables": null,
                                     "elems": [
-                                      {
-                                        "key": "name",
-                                        "value": "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256"
-                                      },
                                       {
                                         "key": "kex_info",
                                         "value": "secp256r1"
@@ -1327,6 +437,10 @@
                                       {
                                         "key": "strength",
                                         "value": "A"
+                                      },
+                                      {
+                                        "key": "name",
+                                        "value": "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256"
                                       }
                                     ]
                                   }
@@ -1362,16 +476,16 @@
                                     "tables": null,
                                     "elems": [
                                       {
-                                        "key": "name",
-                                        "value": "TLS_AKE_WITH_AES_128_GCM_SHA256"
-                                      },
-                                      {
                                         "key": "kex_info",
                                         "value": "ecdh_x25519"
                                       },
                                       {
                                         "key": "strength",
                                         "value": "A"
+                                      },
+                                      {
+                                        "key": "name",
+                                        "value": "TLS_AKE_WITH_AES_128_GCM_SHA256"
                                       }
                                     ]
                                   },
@@ -1379,17 +493,17 @@
                                     "key": "",
                                     "tables": null,
                                     "elems": [
+                                      {
+                                        "key": "kex_info",
+                                        "value": "ecdh_x25519"
+                                      },
+                                      {
+                                        "key": "strength",
+                                        "value": "A"
+                                      },
                                       {
                                         "key": "name",
                                         "value": "TLS_AKE_WITH_AES_256_GCM_SHA384"
-                                      },
-                                      {
-                                        "key": "kex_info",
-                                        "value": "ecdh_x25519"
-                                      },
-                                      {
-                                        "key": "strength",
-                                        "value": "A"
                                       }
                                     ]
                                   },
@@ -1398,16 +512,16 @@
                                     "tables": null,
                                     "elems": [
                                       {
-                                        "key": "name",
-                                        "value": "TLS_AKE_WITH_CHACHA20_POLY1305_SHA256"
-                                      },
-                                      {
                                         "key": "kex_info",
                                         "value": "ecdh_x25519"
                                       },
                                       {
                                         "key": "strength",
                                         "value": "A"
+                                      },
+                                      {
+                                        "key": "name",
+                                        "value": "TLS_AKE_WITH_CHACHA20_POLY1305_SHA256"
                                       }
                                     ]
                                   }
@@ -1468,5 +582,16 @@
     "kubelet_config": {
       "raw": "apiVersion: kubelet.config.k8s.io/v1beta1\nauthentication:\n  anonymous:\n    enabled: false\n  webhook:\n    cacheTTL: 0s\n  x509:\n    clientCAFile: /etc/kubernetes/kubelet-ca.crt\nauthorization:\n  webhook:\n    cacheAuthorizedTTL: 0s\n    cacheUnauthorizedTTL: 0s\ncgroupDriver: systemd\ncgroupRoot: /\nclusterDNS:\n- 172.30.0.10\nclusterDomain: cluster.local\ncontainerLogMaxSize: 50Mi\ncontainerRuntimeEndpoint: \"\"\ncpuManagerReconcilePeriod: 0s\ncrashLoopBackOff: {}\nenableSystemLogQuery: true\nevictionPressureTransitionPeriod: 0s\nfeatureGates:\n  AWSClusterHostedDNS: false\n  AWSEFSDriverVolumeMetrics: true\n  AdditionalRoutingCapabilities: true\n  AdminNetworkPolicy: true\n  AlibabaPlatform: true\n  AutomatedEtcdBackup: false\n  AzureWorkloadIdentity: true\n  BareMetalLoadBalancer: true\n  BootcNodeManagement: false\n  BuildCSIVolumes: true\n  CPMSMachineNamePrefix: true\n  ChunkSizeMiB: true\n  CloudDualStackNodeIPs: true\n  ClusterAPIInstall: false\n  ClusterAPIInstallIBMCloud: false\n  ClusterMonitoringConfig: false\n  ClusterVersionOperatorConfiguration: false\n  ConsolePluginContentSecurityPolicy: true\n  DNSNameResolver: false\n  DisableKubeletCloudCredentialProviders: true\n  DualReplica: false\n  DyanmicServiceEndpointIBMCloud: false\n  DynamicResourceAllocation: false\n  EtcdBackendQuota: false\n  EventedPLEG: false\n  Example: false\n  Example2: false\n  ExternalOIDC: false\n  ExternalOIDCWithUIDAndExtraClaimMappings: false\n  GCPClusterHostedDNS: false\n  GCPCustomAPIEndpoints: false\n  GCPLabelsTags: true\n  GatewayAPI: true\n  GatewayAPIController: true\n  HardwareSpeed: true\n  HighlyAvailableArbiter: false\n  ImageStreamImportMode: false\n  IngressControllerDynamicConfigurationManager: false\n  IngressControllerLBSubnetsAWS: true\n  InsightsConfig: false\n  InsightsConfigAPI: false\n  InsightsOnDemandDataGather: false\n  InsightsRuntimeExtractor: false\n  KMSEncryptionProvider: false\n  KMSv1: true\n  MachineAPIMigration: false\n  MachineAPIOperatorDisableMachineHealthCheckController: false\n  MachineAPIProviderOpenStack: false\n  MachineConfigNodes: true\n  ManagedBootImages: true\n  ManagedBootImagesAWS: true\n  MaxUnavailableStatefulSet: false\n  MetricsCollectionProfiles: true\n  MinimumKubeletVersion: false\n  MixedCPUsAllocation: false\n  MultiArchInstallAWS: true\n  MultiArchInstallAzure: false\n  MultiArchInstallGCP: true\n  NetworkDiagnosticsConfig: true\n  NetworkLiveMigration: true\n  NetworkSegmentation: true\n  NewOLM: true\n  NewOLMCatalogdAPIV1Metas: false\n  NewOLMOwnSingleNamespace: false\n  NewOLMPreflightPermissionChecks: false\n  NodeDisruptionPolicy: true\n  NodeSwap: false\n  NutanixMultiSubnets: false\n  OVNObservability: false\n  OnClusterBuild: true\n  OpenShiftPodSecurityAdmission: false\n  PersistentIPsForVirtualization: true\n  PinnedImages: true\n  PlatformOperators: false\n  PrivateHostedZoneAWS: true\n  ProcMountType: false\n  RouteAdvertisements: true\n  RouteExternalCertificate: true\n  SELinuxChangePolicy: false\n  SELinuxMount: false\n  ServiceAccountTokenNodeBinding: true\n  SetEIPForNLBIngressController: true\n  ShortCertRotation: false\n  SignatureStores: false\n  SigstoreImageVerification: false\n  SigstoreImageVerificationPKI: false\n  TranslateStreamCloseWebsocketRequests: false\n  UpgradeStatus: false\n  UserNamespacesPodSecurityStandards: false\n  UserNamespacesSupport: false\n  VSphereConfigurableMaxAllowedBlockVolumesPerNode: false\n  VSphereDriverConfiguration: true\n  VSphereHostVMGroupZonal: false\n  VSphereMultiDisk: false\n  VSphereMultiNetworks: false\n  VSphereMultiVCenters: true\n  ValidatingAdmissionPolicy: true\n  VolumeAttributesClass: false\n  VolumeGroupSnapshot: false\nfileCheckFrequency: 0s\nhttpCheckFrequency: 0s\nimageMaximumGCAge: 0s\nimageMinimumGCAge: 0s\nkind: KubeletConfiguration\nkubeAPIBurst: 100\nkubeAPIQPS: 50\nlogging:\n  flushFrequency: 0\n  options:\n    json:\n      infoBufferSize: \"0\"\n    text:\n      infoBufferSize: \"0\"\n  verbosity: 0\nmaxPods: 250\nmemorySwap: {}\nnodeStatusReportFrequency: 5m0s\nnodeStatusUpdateFrequency: 10s\npodPidsLimit: 4096\nprotectKernelDefaults: true\nrotateCertificates: true\nruntimeRequestTimeout: 0s\nserializeImagePulls: false\nserverTLSBootstrap: true\nshutdownGracePeriod: 0s\nshutdownGracePeriodCriticalPods: 0s\nstaticPodPath: /etc/kubernetes/manifests\nstreamingConnectionIdleTimeout: 0s\nsyncFrequency: 0s\nsystemCgroups: /system.slice\ntlsCipherSuites:\n- TLS_AES_128_GCM_SHA256\n- TLS_AES_256_GCM_SHA384\n- TLS_CHACHA20_POLY1305_SHA256\ntlsMinVersion: VersionTLS13\nvolumeStatsAggPeriod: 0s\n"
     }
-  }
+  },
+  "scan_errors": [
+    {
+      "ip": "10.128.0.16",
+      "port": 17698,
+      "error_type": "PROCESS_DETECTION_FAILED",
+      "error_message": "process not found in container openshift-apiserver for port 17698",
+      "pod_name": "apiserver-69589fdbb7-h2xnf",
+      "namespace": "openshift-apiserver",
+      "container": "openshift-apiserver"
+    }
+  ]
 }
