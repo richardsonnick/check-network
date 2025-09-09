@@ -725,6 +725,7 @@ func main() {
 	concurrentScans := flag.Int("j", 1, "Number of concurrent scans to run in parallel (speeds up large IP lists significantly!)")
 	allPods := flag.Bool("all-pods", false, "Scan all pods in the current namespace (overrides --iplist and --host)")
 	serviceMapping := flag.String("service-mapping", "", "Generate service-to-IP mapping JSON file (optional)")
+	limitIPs := flag.Int("limit-ips", 0, "Limit the number of IPs to scan for testing purposes (0 = no limit)")
 	flag.Parse()
 
 	if !isNmapInstalled() {
@@ -751,6 +752,24 @@ func main() {
 		// No need to call discoverPods here, getAllPodsInfo will do it.
 		allPodsInfo = k8sClient.getAllPodsInfo()
 		log.Printf("Found %d pods to scan from the cluster.", len(allPodsInfo))
+		
+		// Apply IP limit if specified
+		if *limitIPs > 0 {
+			totalIPs := 0
+			for _, pod := range allPodsInfo {
+				totalIPs += len(pod.IPs)
+			}
+			
+			if totalIPs > *limitIPs {
+				log.Printf("Limiting scan to %d IPs (found %d total IPs)", *limitIPs, totalIPs)
+				allPodsInfo = limitPodsToIPCount(allPodsInfo, *limitIPs)
+				limitedTotal := 0
+				for _, pod := range allPodsInfo {
+					limitedTotal += len(pod.IPs)
+				}
+				log.Printf("After limiting: %d pods with %d total IPs", len(allPodsInfo), limitedTotal)
+			}
+		}
 	} else if *ipListFile != "" {
 		ips, err := readIPsFromFile(*ipListFile)
 		if err != nil {
@@ -768,6 +787,13 @@ func main() {
 				}
 			}
 		}
+		
+		// Apply IP limit if specified
+		if *limitIPs > 0 && len(ips) > *limitIPs {
+			log.Printf("Limiting scan to %d IPs (found %d total IPs)", *limitIPs, len(ips))
+			ips = ips[:*limitIPs]
+		}
+		
 		allPodsInfo = buildPodInfoFromIPs(ips, k8sClient)
 	}
 
@@ -1948,4 +1974,35 @@ func findCipherIntersection(configured, detected []string) []string {
 	}
 	
 	return removeDuplicates(intersection)
+}
+
+// limitPodsToIPCount limits the pod list to contain at most maxIPs total IP addresses
+func limitPodsToIPCount(allPodsInfo []PodInfo, maxIPs int) []PodInfo {
+	if maxIPs <= 0 {
+		return allPodsInfo
+	}
+	
+	var limitedPods []PodInfo
+	currentIPCount := 0
+	
+	for _, pod := range allPodsInfo {
+		if currentIPCount >= maxIPs {
+			break
+		}
+		
+		// If this pod would exceed the limit, include only some of its IPs
+		if currentIPCount + len(pod.IPs) > maxIPs {
+			remainingIPs := maxIPs - currentIPCount
+			limitedPod := pod
+			limitedPod.IPs = pod.IPs[:remainingIPs]
+			limitedPods = append(limitedPods, limitedPod)
+			break
+		}
+		
+		// Include the entire pod
+		limitedPods = append(limitedPods, pod)
+		currentIPCount += len(pod.IPs)
+	}
+	
+	return limitedPods
 }
