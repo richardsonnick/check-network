@@ -48,6 +48,8 @@ cleanup() {
     echo "--> Deleting existing resources for '$APP_NAME' in project '$CURRENT_PROJECT' (if they exist)..."
     oc delete deployment "$APP_NAME" -n "$CURRENT_PROJECT" --ignore-not-found=true
     oc delete service "$APP_NAME" -n "$CURRENT_PROJECT" --ignore-not-found=true
+    echo "--> Deleting existing builds for '$APP_NAME'..."
+    oc delete builds -l buildconfig="$APP_NAME" -n "$CURRENT_PROJECT" --ignore-not-found=true
     oc delete buildconfig "$APP_NAME" -n "$CURRENT_PROJECT" --ignore-not-found=true
     oc delete imagestream "$APP_NAME" -n "$CURRENT_PROJECT" --ignore-not-found=true
     oc delete secret pull-secret -n "$CURRENT_PROJECT" --ignore-not-found=true
@@ -200,7 +202,7 @@ fi
 
 echo "--> Executing the scan in the background inside the pod..."
 # The command is run in the background of the script, but synchronously inside the pod
-oc exec -n "$CURRENT_PROJECT" "$POD_NAME" -- /usr/local/bin/check-network -all-pods -csv /tmp/security-scan-$(date +%Y%m%d).csv -csv-columns all -json /tmp/security-scan-$(date +%Y%m%d).json -j 15
+oc exec -n "$CURRENT_PROJECT" "$POD_NAME" -- /usr/local/bin/check-network -all-pods -csv /tmp/security-scan-$(date +%Y%m%d).csv -csv-columns all -json /tmp/security-scan-$(date +%Y%m%d).json -j 15 -limit-ips 5
 check_error "Executing scan"
 
 print_header "Step 3: Retrieving and Displaying Results"
@@ -213,8 +215,12 @@ echo "--> Copying JSON results from the pod..."
 oc cp "$CURRENT_PROJECT/$POD_NAME:/tmp/security-scan-$SCAN_DATE.json" ./security-scan-$SCAN_DATE.json
 check_error "Copying JSON results from pod"
 
+echo "--> Copying scan error results from the pod (if they exist)..."
+oc cp "$CURRENT_PROJECT/$POD_NAME:/tmp/security-scan-$SCAN_DATE"_errors.csv ./security-scan-$SCAN_DATE"_errors.csv" 2>/dev/null || echo "   No scan errors file found (this is normal if no scan errors occurred)"
+
 echo "--> Scan complete! Results available:"
 echo "   CSV Security Report: security-scan-$SCAN_DATE.csv"
 echo "   JSON Detailed Results: security-scan-$SCAN_DATE.json"
+echo "   CSV Error Report: security-scan-$SCAN_DATE"_errors.csv" (if errors occurred)"
 echo ""
 
