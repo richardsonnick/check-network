@@ -8,8 +8,9 @@ A network security scanner for OpenShift/Kubernetes clusters that combines nmap 
 -  **Port discovery**: Automatic detection of open ports on target IPs
 -  **SSL/TLS analysis**: Deep cipher suite enumeration using nmap's `ssl-enum-ciphers` script  
 -  **OpenShift integration**: Extracts component metadata from running pods
--  **High performance**: Concurrent scanning with configurable worker pools
--  **Multiple output formats**: Human-readable console output or structured JSON
+-  **TLS Security Profiles**: Captures OpenShift TLS security configurations from Ingress Controller, API Server, and Kubelet
+-  **High performance**: Concurrent scanning with configurable worker pools and non-blocking TLS config collection
+-  **Multiple output formats**: Human-readable console output or structured JSON/CSV
 -  **Flexible targeting**: Scan individual hosts, IP lists, or entire clusters
 -  **Process identification**: Identifies processes listening on discovered ports
 
@@ -128,6 +129,22 @@ Structured format containing:
 {
   "timestamp": "2024-01-01T12:00:00Z",
   "total_ips": 238,
+  "tls_security_config": {
+    "ingress_controller": {
+      "type": "Intermediate",
+      "min_tls_version": "VersionTLS12",
+      "ciphers": ["TLS_AES_128_GCM_SHA256", "TLS_AES_256_GCM_SHA384", "TLS_CHACHA20_POLY1305_SHA256"]
+    },
+    "api_server": {
+      "type": "Intermediate", 
+      "min_tls_version": "VersionTLS12",
+      "ciphers": ["ECDHE-ECDSA-AES128-GCM-SHA256", "ECDHE-RSA-AES128-GCM-SHA256"]
+    },
+    "kubelet_config": {
+      "tls_min_version": "VersionTLS12",
+      "tls_cipher_suites": ["TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256", "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256"]
+    }
+  },
   "ip_results": [
     {
       "ip": "10.0.0.1",
@@ -153,44 +170,39 @@ Structured format containing:
 ```
 
 ### CSV Output (`-csv` flag)
-Comprehensive security format with **one row per IP/port/TLS version** and configurable columns for different analysis needs:
+Streamlined security format with **one row per IP/port combination** focusing on TLS cipher analysis and OpenShift configuration compliance:
 
 **Column Sets:**
-- **`minimal`**: `IP Address, Port, Service, TLS Version, Cipher Suites` - Focus on TLS analysis
-- **`default`**: `IP Address, Port, Service, Pod, Namespace, TLS Version, Cipher Suites, Status, Process Name, OpenShift Component` - Balanced security overview
-- **`all`**: All 14 columns with complete security context including container names, component details, and service types
+- **`minimal`**: `IP, Port, TLS Version, TLS Ciphers` - Essential TLS scan data
+- **`default`**: `IP, Port, Pod Name, Namespace, Process, TLS Ciphers, TLS Version, Ingress TLS Configured Ciphers, API Server TLS Configured Ciphers, Kubelet TLS Configured Ciphers` - Comprehensive security overview  
+- **`all`**: All 10 columns with complete scan results and OpenShift TLS configurations
 
 **All Available Columns:**
-- `IP Address` - Target IP address
+- `IP` - Target IP address
 - `Port` - Specific port number  
-- `Service` - Service name detected by nmap
-- `Pod` - Associated Kubernetes service names (comma-separated)
-- `Namespace` - Service namespaces (comma-separated)
-- `TLS Version` - TLS/SSL protocol version (TLSv1.2, TLSv1.3, etc.)
-- `Cipher Suites` - Comma-separated list of cipher suite names for this TLS version
-- `Status` - Scan status (scanned/error/timeout)
-- `Process Name` - Process listening on port (from lsof)
-- `Container Name` - Container hosting the process
-- `OpenShift Component` - Identified OpenShift component
-- `Component Source` - Source location/registry  
-- `Component Maintainer` - Component maintainer
-- `Service Type` - Kubernetes service type (ClusterIP, NodePort, etc.)
-- `Error` - Error message if scan failed
+- `Pod Name` - Kubernetes pod name
+- `Namespace` - Kubernetes namespace
+- `Process` - Process listening on port (from lsof)
+- `TLS Ciphers` - Cipher suites detected by nmap ssl-enum-ciphers script
+- `TLS Version` - TLS/SSL protocol versions detected by nmap ssl-enum-ciphers script (TLSv1.2, TLSv1.3, etc.)
+- `Ingress TLS Configured Ciphers` - Ingress Controller configured cipher suites from OpenShift
+- `API Server TLS Configured Ciphers` - API Server configured cipher suites from OpenShift
+- `Kubelet TLS Configured Ciphers` - Kubelet configured cipher suites from OpenShift
 
 **Key Features:**
-- **Clean Layout**: One row per IP/port/TLS version for optimal readability
-- **Cipher Suite Lists**: All cipher suites for a TLS version grouped in comma-separated lists
-- **Configurable Columns**: Choose minimal, default, all, or custom column sets
-- **Rich Context**: Includes process names, container info, OpenShift components
-- **Service Integration**: Automatic service-to-IP mapping
-- **TLS Analysis**: Perfect for security compliance and vulnerability analysis
+- **Streamlined Layout**: One row per IP/port combination for focused analysis
+- **Component-Specific Analysis**: Separate TLS config data for Ingress Controller, API Server, and Kubelet
+- **Scan Results**: Shows actual cipher suites and TLS versions detected by nmap ssl-enum-ciphers script
+- **Configuration Data**: Shows configured cipher suites from each OpenShift TLS component
+- **Efficient Query**: TLS configuration queried once per scan (not per row) for optimal performance
+- **Process Context**: Includes pod, namespace, and process information
+- **Security Compliance**: Perfect for auditing TLS compliance across OpenShift components
 
 **Example CSV Output (default columns):**
 ```csv
-IP Address,Port,Service,Pod,Namespace,TLS Version,Cipher Suites,Status,Process Name,OpenShift Component
-10.128.0.87,443,ssl/https,oauth-openshift,openshift-authentication,TLSv1.2,"TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256, TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",scanned,oauth-openshift,oauth-openshift
-10.128.0.87,443,ssl/https,oauth-openshift,openshift-authentication,TLSv1.3,"TLS_AES_128_GCM_SHA256, TLS_AES_256_GCM_SHA384",scanned,oauth-openshift,oauth-openshift
-10.129.0.56,8080,http,my-app,default,N/A,N/A,scanned,httpd,custom-app
+IP,Port,Pod Name,Namespace,Process,TLS Ciphers,TLS Version,Ingress TLS Configured Ciphers,API Server TLS Configured Ciphers,Kubelet TLS Configured Ciphers
+10.128.0.87,443,oauth-openshift,openshift-authentication,oauth-openshift,"TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256, TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384","TLSv1.2, TLSv1.3","ECDHE-ECDSA-AES128-GCM-SHA256, ECDHE-RSA-AES128-GCM-SHA256","ECDHE-ECDSA-CHACHA20-POLY1305, ECDHE-RSA-CHACHA20-POLY1305, ECDHE-RSA-AES128-GCM-SHA256","TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256, TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256"
+10.129.0.56,8080,my-app,default,httpd,N/A,N/A,"ECDHE-ECDSA-AES128-GCM-SHA256, ECDHE-RSA-AES128-GCM-SHA256","ECDHE-ECDSA-CHACHA20-POLY1305, ECDHE-RSA-CHACHA20-POLY1305, ECDHE-RSA-AES128-GCM-SHA256","TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256, TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256"
 ```
 
 ### Console Output (Default)
@@ -207,6 +219,40 @@ Human-readable format showing:
 The scanner automatically identifies OpenShift components by analyzing:
 - Container image references
 - Pod labels and annotations  
+
+### TLS Security Profile Discovery
+The scanner automatically captures TLS security configurations from OpenShift cluster components by executing:
+
+**Ingress Controller TLS Configuration:**
+```bash
+oc describe IngressController default -n openshift-ingress-operator
+```
+
+**API Server TLS Configuration:**
+```bash
+oc describe apiserver cluster
+```
+
+**Kubelet TLS Configuration:**
+```bash
+cat /etc/kubernetes/kubelet.conf
+```
+
+This provides comprehensive TLS security compliance information including:
+- **Profile Types**: Old, Intermediate, Modern, or Custom TLS security profiles
+- **Minimum TLS Versions**: Configured minimum TLS protocol versions  
+- **Allowed Cipher Suites**: Lists of permitted cipher suites for each component
+- **Raw Configuration Output**: Complete configuration details for audit purposes
+
+**Performance Optimization:**
+The TLS security profile collection runs concurrently with the main scanning operations, ensuring that:
+- Worker threads start immediately without waiting for TLS config collection
+- Multiple TLS components (Ingress, API Server, Kubelet) are queried in parallel
+- **Single Query Per Scan**: TLS configuration is collected once per scan (not per row) for maximum efficiency
+- Scanning performance is not impacted by configuration discovery
+- Total scan time is minimized through intelligent thread utilization
+
+The TLS security profile information is automatically included in both JSON and CSV outputs, enabling security compliance analysis and mapping of individual scan results to cluster-wide TLS policies.
 
 ### Required Permissions
 

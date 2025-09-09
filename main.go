@@ -80,10 +80,11 @@ type Elem struct {
 }
 
 type ScanResults struct {
-	Timestamp  string     `json:"timestamp"`
-	TotalIPs   int        `json:"total_ips"`
-	ScannedIPs int        `json:"scanned_ips"`
-	IPResults  []IPResult `json:"ip_results"`
+	Timestamp         string             `json:"timestamp"`
+	TotalIPs          int                `json:"total_ips"`
+	ScannedIPs        int                `json:"scanned_ips"`
+	IPResults         []IPResult         `json:"ip_results"`
+	TLSSecurityConfig *TLSSecurityProfile `json:"tls_security_config,omitempty"`
 }
 
 type IPResult struct {
@@ -119,6 +120,33 @@ type OpenshiftComponent struct {
 	SourceLocation      string `json:"source_location"`
 	MaintainerComponent string `json:"maintainer_component"`
 	IsBundle            bool   `json:"is_bundle"`
+}
+
+// TLSSecurityProfile represents TLS configuration from OpenShift components
+type TLSSecurityProfile struct {
+	IngressController *IngressTLSProfile `json:"ingress_controller,omitempty"`
+	APIServer         *APIServerTLSProfile `json:"api_server,omitempty"`
+	KubeletConfig     *KubeletTLSProfile `json:"kubelet_config,omitempty"`
+}
+
+type IngressTLSProfile struct {
+	Type         string   `json:"type,omitempty"`
+	MinTLSVersion string   `json:"min_tls_version,omitempty"`
+	Ciphers      []string `json:"ciphers,omitempty"`
+	Raw          string   `json:"raw,omitempty"`
+}
+
+type APIServerTLSProfile struct {
+	Type         string   `json:"type,omitempty"`
+	MinTLSVersion string   `json:"min_tls_version,omitempty"`
+	Ciphers      []string `json:"ciphers,omitempty"`
+	Raw          string   `json:"raw,omitempty"`
+}
+
+type KubeletTLSProfile struct {
+	TLSCipherSuites []string `json:"tls_cipher_suites,omitempty"`
+	TLSMinVersion   string   `json:"tls_min_version,omitempty"`
+	Raw             string   `json:"raw,omitempty"`
 }
 
 type K8sClient struct {
@@ -250,6 +278,10 @@ func (k *K8sClient) getOpenshiftComponentFromImage(image string) (*OpenshiftComp
 	log.Printf("Attempting to gather component info from cluster metadata for: %s", image)
 	return k.getComponentFromClusterMetadata(image)
 }
+
+
+// TODO: This is much different than how check-payload does it...
+// https://github.com/openshift/check-payload/blob/1c3541964ab045305b9754305e99ab80d35da8e4/internal/podman/podman.go#L157
 
 func (k *K8sClient) parseOpenshiftComponentFromImageRef(image string) *OpenshiftComponent {
 	// Handle OpenShift release images - similar to check-payload approach
@@ -439,6 +471,250 @@ func (k *K8sClient) getProcessNameFromPod(podName, namespace, containerName stri
 	return processName, nil
 }
 
+// getTLSSecurityProfile collects TLS security profile configurations from OpenShift components
+func (k *K8sClient) getTLSSecurityProfile() (*TLSSecurityProfile, error) {
+	log.Printf("Collecting TLS security profiles from OpenShift components...")
+	
+	profile := &TLSSecurityProfile{}
+	
+	// Collect Ingress Controller TLS configuration
+	if ingressTLS, err := k.getIngressControllerTLS(); err != nil {
+		log.Printf("Warning: Could not get Ingress Controller TLS config: %v", err)
+	} else {
+		profile.IngressController = ingressTLS
+	}
+	
+	// Collect API Server TLS configuration  
+	if apiServerTLS, err := k.getAPIServerTLS(); err != nil {
+		log.Printf("Warning: Could not get API Server TLS config: %v", err)
+	} else {
+		profile.APIServer = apiServerTLS
+	}
+	
+	// Collect Kubelet TLS configuration
+	if kubeletTLS, err := k.getKubeletTLS(); err != nil {
+		log.Printf("Warning: Could not get Kubelet TLS config: %v", err)
+	} else {
+		profile.KubeletConfig = kubeletTLS
+	}
+	
+	return profile, nil
+}
+
+// getIngressControllerTLS gets TLS configuration from Ingress Controller
+func (k *K8sClient) getIngressControllerTLS() (*IngressTLSProfile, error) {
+	cmd := exec.Command("oc", "describe", "IngressController", "default", "-n", "openshift-ingress-operator")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get ingress controller config: %v", err)
+	}
+	
+	rawOutput := string(output)
+	profile := &IngressTLSProfile{
+		Raw: rawOutput,
+	}
+	
+	// Parse TLS security profile information
+	lines := strings.Split(rawOutput, "\n")
+	inTLSSection := false
+	
+	for _, line := range lines {
+		trimmedLine := strings.TrimSpace(line)
+		
+		// Look for TLS Security Profile section
+		if strings.Contains(trimmedLine, "Tls Security Profile:") {
+			inTLSSection = true
+			continue
+		}
+		
+		if inTLSSection {
+			// Stop if we hit another major section
+			if strings.HasSuffix(trimmedLine, ":") && !strings.Contains(trimmedLine, "Type:") && 
+			   !strings.Contains(trimmedLine, "Min TLS Version:") && !strings.Contains(trimmedLine, "Ciphers:") {
+				break
+			}
+			
+			if strings.Contains(trimmedLine, "Type:") {
+				profile.Type = strings.TrimSpace(strings.Split(trimmedLine, "Type:")[1])
+			} else if strings.Contains(trimmedLine, "Min TLS Version:") {
+				profile.MinTLSVersion = strings.TrimSpace(strings.Split(trimmedLine, "Min TLS Version:")[1])
+			} else if strings.Contains(trimmedLine, "Ciphers:") {
+				cipherLine := strings.TrimSpace(strings.Split(trimmedLine, "Ciphers:")[1])
+				if cipherLine != "" {
+					profile.Ciphers = strings.Split(cipherLine, ",")
+					for i, cipher := range profile.Ciphers {
+						profile.Ciphers[i] = strings.TrimSpace(cipher)
+					}
+				}
+			}
+		}
+	}
+	
+	return profile, nil
+}
+
+// getAPIServerTLS gets TLS configuration from API Server
+func (k *K8sClient) getAPIServerTLS() (*APIServerTLSProfile, error) {
+	cmd := exec.Command("oc", "describe", "apiserver", "cluster")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get API server config: %v", err)
+	}
+	
+	rawOutput := string(output)
+	profile := &APIServerTLSProfile{
+		Raw: rawOutput,
+	}
+	
+	// Parse TLS security profile information
+	lines := strings.Split(rawOutput, "\n")
+	inTLSSection := false
+	
+	for _, line := range lines {
+		trimmedLine := strings.TrimSpace(line)
+		
+		// Look for TLS Security Profile section
+		if strings.Contains(trimmedLine, "Tls Security Profile:") {
+			inTLSSection = true
+			continue
+		}
+		
+		if inTLSSection {
+			// Stop if we hit another major section
+			if strings.HasSuffix(trimmedLine, ":") && !strings.Contains(trimmedLine, "Type:") && 
+			   !strings.Contains(trimmedLine, "Min TLS Version:") && !strings.Contains(trimmedLine, "Ciphers:") {
+				break
+			}
+			
+			if strings.Contains(trimmedLine, "Type:") {
+				profile.Type = strings.TrimSpace(strings.Split(trimmedLine, "Type:")[1])
+			} else if strings.Contains(trimmedLine, "Min TLS Version:") {
+				profile.MinTLSVersion = strings.TrimSpace(strings.Split(trimmedLine, "Min TLS Version:")[1])
+			} else if strings.Contains(trimmedLine, "Ciphers:") {
+				cipherLine := strings.TrimSpace(strings.Split(trimmedLine, "Ciphers:")[1])
+				if cipherLine != "" {
+					profile.Ciphers = strings.Split(cipherLine, ",")
+					for i, cipher := range profile.Ciphers {
+						profile.Ciphers[i] = strings.TrimSpace(cipher)
+					}
+				}
+			}
+		}
+	}
+	
+	return profile, nil
+}
+
+// getKubeletTLS gets TLS configuration from Kubelet config file
+func (k *K8sClient) getKubeletTLS() (*KubeletTLSProfile, error) {
+	// Since we need to access the host filesystem, we'll try to get this from a node
+	// This assumes the scanner is running in a privileged pod with host access
+	kubeletConfigPath := "/host/etc/kubernetes/kubelet.conf"
+	
+	// First try to read from host mount
+	content, err := os.ReadFile(kubeletConfigPath)
+	if err != nil {
+		// Fallback: try to exec into a node or get config via API
+		log.Printf("Could not read kubelet config from %s: %v, trying alternative method", kubeletConfigPath, err)
+		return k.getKubeletTLSFromNode()
+	}
+	
+	rawContent := string(content)
+	profile := &KubeletTLSProfile{
+		Raw: rawContent,
+	}
+	
+	// Parse JSON-like content for TLS settings
+	lines := strings.Split(rawContent, "\n")
+	
+	for _, line := range lines {
+		trimmedLine := strings.TrimSpace(line)
+		
+		if strings.Contains(trimmedLine, `"tlsCipherSuites"`) {
+			// Extract cipher suites array
+			if cipherStart := strings.Index(trimmedLine, "["); cipherStart != -1 {
+				if cipherEnd := strings.Index(trimmedLine, "]"); cipherEnd != -1 {
+					cipherStr := trimmedLine[cipherStart+1 : cipherEnd]
+					ciphers := strings.Split(cipherStr, ",")
+					for _, cipher := range ciphers {
+						cleanCipher := strings.Trim(strings.TrimSpace(cipher), `"`)
+						if cleanCipher != "" {
+							profile.TLSCipherSuites = append(profile.TLSCipherSuites, cleanCipher)
+						}
+					}
+				}
+			}
+		} else if strings.Contains(trimmedLine, `"tlsMinVersion"`) {
+			// Extract minimum TLS version
+			if colonIndex := strings.Index(trimmedLine, ":"); colonIndex != -1 {
+				versionPart := strings.TrimSpace(trimmedLine[colonIndex+1:])
+				profile.TLSMinVersion = strings.Trim(versionPart, `",`)
+			}
+		}
+	}
+	
+	return profile, nil
+}
+
+// getKubeletTLSFromNode attempts to get kubelet config by executing commands on a node
+func (k *K8sClient) getKubeletTLSFromNode() (*KubeletTLSProfile, error) {
+	// Get a list of nodes
+	nodes, err := k.clientset.CoreV1().Nodes().List(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list nodes: %v", err)
+	}
+	
+	if len(nodes.Items) == 0 {
+		return nil, fmt.Errorf("no nodes found")
+	}
+	
+	// Try to get kubelet config from the first node
+	nodeName := nodes.Items[0].Name
+	
+	// Create a debug pod on the node to read the kubelet config
+	cmd := exec.Command("oc", "debug", "node/"+nodeName, "--", "cat", "/host/etc/kubernetes/kubelet.conf")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("failed to read kubelet config from node %s: %v", nodeName, err)
+	}
+	
+	rawOutput := string(output)
+	profile := &KubeletTLSProfile{
+		Raw: rawOutput,
+	}
+	
+	// Parse the kubelet config similar to the direct file read method
+	lines := strings.Split(rawOutput, "\n")
+	
+	for _, line := range lines {
+		trimmedLine := strings.TrimSpace(line)
+		
+		if strings.Contains(trimmedLine, `"tlsCipherSuites"`) {
+			// Extract cipher suites array
+			if cipherStart := strings.Index(trimmedLine, "["); cipherStart != -1 {
+				if cipherEnd := strings.Index(trimmedLine, "]"); cipherEnd != -1 {
+					cipherStr := trimmedLine[cipherStart+1 : cipherEnd]
+					ciphers := strings.Split(cipherStr, ",")
+					for _, cipher := range ciphers {
+						cleanCipher := strings.Trim(strings.TrimSpace(cipher), `"`)
+						if cleanCipher != "" {
+							profile.TLSCipherSuites = append(profile.TLSCipherSuites, cleanCipher)
+						}
+					}
+				}
+			}
+		} else if strings.Contains(trimmedLine, `"tlsMinVersion"`) {
+			// Extract minimum TLS version
+			if colonIndex := strings.Index(trimmedLine, ":"); colonIndex != -1 {
+				versionPart := strings.TrimSpace(trimmedLine[colonIndex+1:])
+				profile.TLSMinVersion = strings.Trim(versionPart, `",`)
+			}
+		}
+	}
+	
+	return profile, nil
+}
+
 func main() {
 	host := flag.String("host", "127.0.0.1", "The target host or IP address to scan")
 	port := flag.String("port", "443", "The target port to scan")
@@ -581,11 +857,22 @@ func main() {
 	}
 	
 	if *csvOutput != "" {
+		// For single host scans, try to get TLS config if k8s client is available
+		var tlsConfig *TLSSecurityProfile
+		if k8sClient != nil {
+			if config, err := k8sClient.getTLSSecurityProfile(); err != nil {
+				log.Printf("Warning: Could not collect TLS security profiles: %v", err)
+			} else {
+				tlsConfig = config
+			}
+		}
+
 		// Convert single scan to ScanResults format for CSV
 		singleResult := ScanResults{
-			Timestamp:  time.Now().Format(time.RFC3339),
-			TotalIPs:   1,
-			ScannedIPs: 1,
+			Timestamp:         time.Now().Format(time.RFC3339),
+			TotalIPs:          1,
+			ScannedIPs:        1,
+			TLSSecurityConfig: tlsConfig,
 			IPResults: []IPResult{{
 				IP:          *host,
 				Status:      "scanned",
@@ -803,7 +1090,29 @@ func scanIPPort(ip string, port int, k8sClient *K8sClient, pod PodInfo) (PortRes
 		}
 	}
 
-	if k8sClient != nil {
+	// Check if TLS data was found before doing expensive process name detection
+	hasTLSData := false
+	if len(nmapResult.Hosts) > 0 {
+		for _, host := range nmapResult.Hosts {
+			for _, nmapPort := range host.Ports {
+				for _, script := range nmapPort.Scripts {
+					if script.ID == "ssl-enum-ciphers" && len(script.Tables) > 0 {
+						hasTLSData = true
+						break
+					}
+				}
+				if hasTLSData {
+					break
+				}
+			}
+			if hasTLSData {
+				break
+			}
+		}
+	}
+
+	// Only do expensive process name detection if we found TLS data
+	if k8sClient != nil && hasTLSData {
 		// We have the pod info directly
 		for _, containerName := range pod.Containers {
 			processName, err := k8sClient.getProcessNameFromPod(pod.Name, pod.Namespace, containerName, port)
@@ -814,6 +1123,8 @@ func scanIPPort(ip string, port int, k8sClient *K8sClient, pod PodInfo) (PortRes
 				break
 			}
 		}
+	} else if !hasTLSData {
+		log.Printf("Skipping process name detection for %s:%d - no TLS data found", ip, port)
 	}
 
 	return result, nil
@@ -835,10 +1146,21 @@ func performClusterScan(allPodsInfo []PodInfo, concurrentScans int, k8sClient *K
 	fmt.Printf("Concurrent workers: %d\n", concurrentScans)
 	fmt.Printf("========================================\n\n")
 
+	// Collect TLS security configuration from cluster
+	var tlsConfig *TLSSecurityProfile
+	if k8sClient != nil {
+		if config, err := k8sClient.getTLSSecurityProfile(); err != nil {
+			log.Printf("Warning: Could not collect TLS security profiles: %v", err)
+		} else {
+			tlsConfig = config
+		}
+	}
+
 	results := ScanResults{
-		Timestamp: startTime.Format(time.RFC3339),
-		TotalIPs:  totalIPs,
-		IPResults: make([]IPResult, 0, totalIPs),
+		Timestamp:         startTime.Format(time.RFC3339),
+		TotalIPs:          totalIPs,
+		IPResults:         make([]IPResult, 0, totalIPs),
+		TLSSecurityConfig: tlsConfig,
 	}
 
 	// Create a channel to send PodInfo to workers
@@ -956,15 +1278,26 @@ func performClusterScanWithStreaming(allPodsInfo []PodInfo, outputFile string, c
 		}(workerID)
 	}
 
+	// Collect TLS security configuration from cluster
+	var tlsConfig *TLSSecurityProfile
+	if k8sClient != nil {
+		if config, err := k8sClient.getTLSSecurityProfile(); err != nil {
+			log.Printf("Warning: Could not collect TLS security profiles: %v", err)
+		} else {
+			tlsConfig = config
+		}
+	}
+
 	// Start a goroutine to collect results and write them to the file
 	var collectorWg sync.WaitGroup
 	collectorWg.Add(1)
 	go func() {
 		defer collectorWg.Done()
 		results := ScanResults{
-			Timestamp: startTime.Format(time.RFC3339),
-			TotalIPs:  totalIPs,
-			IPResults: make([]IPResult, 0, totalIPs),
+			Timestamp:         startTime.Format(time.RFC3339),
+			TotalIPs:          totalIPs,
+			IPResults:         make([]IPResult, 0, totalIPs),
+			TLSSecurityConfig: tlsConfig,
 		}
 
 		file, err := os.Create(outputFile)
@@ -1351,28 +1684,23 @@ type CSVColumnInfo struct {
 
 // All available CSV columns
 var allCSVColumns = []CSVColumnInfo{
-	{"IP Address", "Target IP address"},
+	{"IP", "Target IP address"},
 	{"Port", "Specific port number"},
-	{"Service", "Service name detected by nmap"},
-	{"Pod", "Associated Kubernetes service names"},
-	{"Namespace", "Service namespaces"},
-	{"TLS Version", "TLS/SSL protocol version"},
-	{"Cipher Name", "Specific cipher suite name"},
-	{"Status", "Scan status (scanned/error/timeout)"},
-	{"Process Name", "Process listening on port"},
-	{"Container Name", "Container hosting the process"},
-	{"OpenShift Component", "Identified OpenShift component"},
-	{"Component Source", "Source location/registry"},
-	{"Component Maintainer", "Component maintainer"},
-	{"Service Type", "Kubernetes service type"},
-	{"Error", "Error message if scan failed"},
+	{"Pod Name", "Kubernetes pod name"},
+	{"Namespace", "Kubernetes namespace"},
+	{"Process", "Process listening on port"},
+	{"TLS Ciphers", "Cipher suites detected in scan"},
+	{"TLS Version", "TLS/SSL protocol version from scan"},
+	{"TLS Configured MinVersion", "OpenShift configured minimum TLS version"},
+	{"TLS Configured Ciphers", "OpenShift configured cipher suites"},
+	{"TLS Accepted Ciphers", "Intersection of configured and detected ciphers"},
 }
 
 // Predefined column sets
 var csvColumnSets = map[string][]string{
-	"minimal": {"IP Address", "Port", "Service", "TLS Version", "Cipher Suites"},
-	"default": {"IP Address", "Port", "Service", "Pod", "Namespace", "TLS Version", "Cipher Suites", "Status", "Process Name", "OpenShift Component"},
-	"all":     {"IP Address", "Port", "Service", "Pod", "Namespace", "TLS Version", "Cipher Suites", "Status", "Process Name", "Container Name", "OpenShift Component", "Component Source", "Component Maintainer", "Service Type", "Error"},
+	"minimal": {"IP", "Port", "TLS Version", "TLS Ciphers"},
+	"default": {"IP", "Port", "Pod Name", "Namespace", "Process", "TLS Ciphers", "TLS Version", "TLS Configured MinVersion", "TLS Configured Ciphers"},
+	"all":     {"IP", "Port", "Pod Name", "Namespace", "Process", "TLS Ciphers", "TLS Version", "TLS Configured MinVersion", "TLS Configured Ciphers", "TLS Accepted Ciphers"},
 }
 
 // parseCSVColumns parses the CSV columns specification
@@ -1395,7 +1723,7 @@ func parseCSVColumns(spec string) []string {
 	return csvColumnSets["default"]
 }
 
-// writeCSVOutput writes scan results to a CSV file with one row per IP/port/TLS version
+// writeCSVOutput writes scan results to a CSV file with one row per IP/port combination
 func writeCSVOutput(results ScanResults, filename string, columnsSpec string) error {
 	log.Printf("Writing CSV output to: %s", filename)
 	
@@ -1419,43 +1747,53 @@ func writeCSVOutput(results ScanResults, filename string, columnsSpec string) er
 	
 	rowCount := 0
 	
-	// Write data rows - one row per IP/port/TLS version with cipher suites as lists
+	// Collect all configured cipher suites and minimum versions from TLS security profiles
+	var allConfiguredCiphers []string
+	var allConfiguredMinVersions []string
+	if results.TLSSecurityConfig != nil {
+		if results.TLSSecurityConfig.IngressController != nil {
+			allConfiguredCiphers = append(allConfiguredCiphers, results.TLSSecurityConfig.IngressController.Ciphers...)
+			if results.TLSSecurityConfig.IngressController.MinTLSVersion != "" {
+				allConfiguredMinVersions = append(allConfiguredMinVersions, results.TLSSecurityConfig.IngressController.MinTLSVersion)
+			}
+		}
+		if results.TLSSecurityConfig.APIServer != nil {
+			allConfiguredCiphers = append(allConfiguredCiphers, results.TLSSecurityConfig.APIServer.Ciphers...)
+			if results.TLSSecurityConfig.APIServer.MinTLSVersion != "" {
+				allConfiguredMinVersions = append(allConfiguredMinVersions, results.TLSSecurityConfig.APIServer.MinTLSVersion)
+			}
+		}
+		if results.TLSSecurityConfig.KubeletConfig != nil {
+			allConfiguredCiphers = append(allConfiguredCiphers, results.TLSSecurityConfig.KubeletConfig.TLSCipherSuites...)
+			if results.TLSSecurityConfig.KubeletConfig.TLSMinVersion != "" {
+				allConfiguredMinVersions = append(allConfiguredMinVersions, results.TLSSecurityConfig.KubeletConfig.TLSMinVersion)
+			}
+		}
+	}
+	// Remove duplicates from configured ciphers and min versions
+	allConfiguredCiphers = removeDuplicates(allConfiguredCiphers)
+	allConfiguredMinVersions = removeDuplicates(allConfiguredMinVersions)
+	
+	// Write data rows - one row per IP/port combination
 	for _, ipResult := range results.IPResults {
-		// Extract common data for this IP
 		ipAddress := ipResult.IP
-		status := ipResult.Status
-		errorMsg := ipResult.Error
 		
-		// Extract service information
-		var podServices, namespaces, serviceTypes []string
+		// Extract pod name and namespace from services
+		var podNames, namespaces []string
 		for _, service := range ipResult.Services {
-			podServices = append(podServices, service.Name)
+			podNames = append(podNames, service.Name)
 			namespaces = append(namespaces, service.Namespace)
-			serviceTypes = append(serviceTypes, service.Type)
 		}
-		podService := joinOrNA(removeDuplicates(podServices))
+		podName := joinOrNA(removeDuplicates(podNames))
 		namespace := joinOrNA(removeDuplicates(namespaces))
-		serviceType := joinOrNA(removeDuplicates(serviceTypes))
-		
-		// Extract OpenShift component info
-		componentName := "N/A"
-		componentSource := "N/A"
-		componentMaintainer := "N/A"
-		if ipResult.OpenshiftComponent != nil {
-			componentName = stringOrNA(ipResult.OpenshiftComponent.Component)
-			componentSource = stringOrNA(ipResult.OpenshiftComponent.SourceLocation)
-			componentMaintainer = stringOrNA(ipResult.OpenshiftComponent.MaintainerComponent)
-		}
 		
 		// Process each port result
 		for _, portResult := range ipResult.PortResults {
 			port := strconv.Itoa(portResult.Port)
-			service := stringOrNA(portResult.Service)
-			processName := stringOrNA(portResult.ProcessName)
-			containerName := stringOrNA(portResult.ContainerName)
 			
-			// Collect TLS versions and their cipher suites
-			tlsToCiphers := make(map[string][]string)
+			// Collect all detected ciphers and TLS versions for this port
+			var allDetectedCiphers []string
+			var tlsVersions []string
 			
 			// Extract TLS versions and ciphers from nmap script results
 			for _, host := range portResult.NmapRun.Hosts {
@@ -1464,28 +1802,19 @@ func writeCSVOutput(results ScanResults, filename string, columnsSpec string) er
 						if script.ID == "ssl-enum-ciphers" {
 							for _, table := range script.Tables {
 								tlsVersion := table.Key
-								if tlsVersion == "" {
-									continue
+								if tlsVersion != "" {
+									tlsVersions = append(tlsVersions, tlsVersion)
 								}
 								
 								// Find ciphers for this TLS version
 								for _, subTable := range table.Tables {
 									if subTable.Key == "ciphers" {
-										var cipherList []string
 										for _, cipherTable := range subTable.Tables {
-											cipherName := ""
 											for _, elem := range cipherTable.Elems {
-												if elem.Key == "name" {
-													cipherName = elem.Value
-													break
+												if elem.Key == "name" && elem.Value != "" {
+													allDetectedCiphers = append(allDetectedCiphers, elem.Value)
 												}
 											}
-											if cipherName != "" {
-												cipherList = append(cipherList, cipherName)
-											}
-										}
-										if len(cipherList) > 0 {
-											tlsToCiphers[tlsVersion] = cipherList
 										}
 									}
 								}
@@ -1495,79 +1824,56 @@ func writeCSVOutput(results ScanResults, filename string, columnsSpec string) er
 				}
 			}
 			
-			// Create one row per TLS version (if any TLS data found)
-			if len(tlsToCiphers) > 0 {
-				for tlsVersion, ciphers := range tlsToCiphers {
-					rowData := map[string]string{
-						"IP Address":           ipAddress,
-						"Port":                port,
-						"Service":             service,
-						"Pod":                 podService,
-						"Namespace":           namespace,
-						"TLS Version":         tlsVersion,
-						"Cipher Suites":       strings.Join(ciphers, ", "),
-						"Status":              status,
-						"Process Name":        processName,
-						"Container Name":      containerName,
-						"OpenShift Component": componentName,
-						"Component Source":    componentSource,
-						"Component Maintainer": componentMaintainer,
-						"Service Type":        serviceType,
-						"Error":               errorMsg,
-					}
-					
-					row := buildCSVRow(selectedColumns, rowData)
-					if err := writer.Write(row); err != nil {
-						return fmt.Errorf("failed to write CSV row: %v", err)
-					}
-					rowCount++
-				}
-			} else {
-				// No TLS data found, add basic row
-				rowData := map[string]string{
-					"IP Address":           ipAddress,
-					"Port":                port,
-					"Service":             service,
-					"Pod":                 podService,
-					"Namespace":           namespace,
-					"TLS Version":         "N/A",
-					"Cipher Suites":       "N/A",
-					"Status":              status,
-					"Process Name":        processName,
-					"Container Name":      containerName,
-					"OpenShift Component": componentName,
-					"Component Source":    componentSource,
-					"Component Maintainer": componentMaintainer,
-					"Service Type":        serviceType,
-					"Error":               errorMsg,
-				}
-				
-				row := buildCSVRow(selectedColumns, rowData)
-				if err := writer.Write(row); err != nil {
-					return fmt.Errorf("failed to write CSV row: %v", err)
-				}
-				rowCount++
+			// Remove duplicates
+			allDetectedCiphers = removeDuplicates(allDetectedCiphers)
+			tlsVersions = removeDuplicates(tlsVersions)
+			
+			// Skip processing this row if no TLS data was found - improves performance
+			if len(allDetectedCiphers) == 0 && len(tlsVersions) == 0 {
+				log.Printf("Skipping CSV row for %s:%s - no TLS data detected", ipAddress, port)
+				continue
 			}
+			
+			// Only get process name for rows with TLS data (already filtered in scanIPPort, but double-check)
+			processName := stringOrNA(portResult.ProcessName)
+			
+			// Calculate intersection of configured and detected ciphers (accepted ciphers)
+			acceptedCiphers := findCipherIntersection(allConfiguredCiphers, allDetectedCiphers)
+			
+			// Create row data
+			rowData := map[string]string{
+				"IP":                      ipAddress,
+				"Port":                    port,
+				"Pod Name":                podName,
+				"Namespace":               namespace,
+				"Process":                 processName,
+				"TLS Ciphers":             joinOrNA(allDetectedCiphers),
+				"TLS Version":             joinOrNA(tlsVersions),
+				"TLS Configured MinVersion": joinOrNA(allConfiguredMinVersions),
+				"TLS Configured Ciphers":  joinOrNA(allConfiguredCiphers),
+				"TLS Accepted Ciphers":    joinOrNA(acceptedCiphers),
+			}
+			
+			row := buildCSVRow(selectedColumns, rowData)
+			if err := writer.Write(row); err != nil {
+				return fmt.Errorf("failed to write CSV row: %v", err)
+			}
+			rowCount++
 		}
 		
-		// If no port results but IP has error, add error row
-		if len(ipResult.PortResults) == 0 && errorMsg != "" {
+		// If no port results but IP has data, add a row with N/A for port-specific data
+		if len(ipResult.PortResults) == 0 {
 			rowData := map[string]string{
-				"IP Address":           ipAddress,
-				"Port":                "N/A",
-				"Service":             "N/A",
-				"Pod":                 podService,
-				"Namespace":           namespace,
-				"TLS Version":         "N/A",
-				"Cipher Suites":       "N/A",
-				"Status":              status,
-				"Process Name":        "N/A",
-				"Container Name":      "N/A",
-				"OpenShift Component": componentName,
-				"Component Source":    componentSource,
-				"Component Maintainer": componentMaintainer,
-				"Service Type":        serviceType,
-				"Error":               errorMsg,
+				"IP":                      ipAddress,
+				"Port":                    "N/A",
+				"Pod Name":                podName,
+				"Namespace":               namespace,
+				"Process":                 "N/A",
+				"TLS Ciphers":             "N/A",
+				"TLS Version":             "N/A",
+				"TLS Configured MinVersion": joinOrNA(allConfiguredMinVersions),
+				"TLS Configured Ciphers":  joinOrNA(allConfiguredCiphers),
+				"TLS Accepted Ciphers":    "N/A",
 			}
 			row := buildCSVRow(selectedColumns, rowData)
 			if err := writer.Write(row); err != nil {
@@ -1620,4 +1926,26 @@ func removeDuplicates(slice []string) []string {
 		}
 	}
 	return result
+}
+
+// findCipherIntersection finds ciphers that appear in both configured and detected lists
+func findCipherIntersection(configured, detected []string) []string {
+	if len(configured) == 0 || len(detected) == 0 {
+		return []string{}
+	}
+	
+	// Create a map for faster lookup
+	configuredMap := make(map[string]bool)
+	for _, cipher := range configured {
+		configuredMap[cipher] = true
+	}
+	
+	var intersection []string
+	for _, cipher := range detected {
+		if configuredMap[cipher] {
+			intersection = append(intersection, cipher)
+		}
+	}
+	
+	return removeDuplicates(intersection)
 }
