@@ -412,7 +412,6 @@ func (k *K8sClient) extractRegistryFromImage(image string) string {
 }
 
 func (k *K8sClient) extractComponentFromPod(pod v1.Pod, container v1.Container) string {
-	// Try to extract component name from pod/container labels
 	if component, exists := pod.Labels["app"]; exists {
 		return component
 	}
@@ -430,7 +429,6 @@ func (k *K8sClient) extractComponentFromPod(pod v1.Pod, container v1.Container) 
 }
 
 func (k *K8sClient) extractMaintainerFromPod(pod v1.Pod) string {
-	// Determine maintainer from namespace or labels
 	if strings.HasPrefix(pod.Namespace, "openshift-") {
 		return "openshift"
 	}
@@ -443,7 +441,6 @@ func (k *K8sClient) extractMaintainerFromPod(pod v1.Pod) string {
 	return "unknown"
 }
 
-// max returns the maximum of two integers
 func max(a, b int) int {
 	if a > b {
 		return a
@@ -452,12 +449,8 @@ func max(a, b int) int {
 }
 
 func (k *K8sClient) getProcessNameFromPod(podName, namespace, containerName string, port int) (string, error) {
-	// Use lsof -t to get the PID, then read the executable path from /proc. This is the most reliable way to get the
-	// full, untruncated process name, bypassing any truncation issues with lsof's text output.
-	command := []string{"/bin/sh", "-c", fmt.Sprintf(
-		`PID=$(lsof -t -i :%d -sTCP:LISTEN -P -n); if [ -n "$PID" ]; then readlink /proc/$PID/exe; else echo ""; fi`,
-		port,
-	)}
+	// Get process name from port
+	command := []string{"/bin/sh", "-c", fmt.Sprintf("lsof -i :%d -sTCP:LISTEN -P -n -F c | grep '^c' | cut -c 2- | head -n 1", port)}
 
 	req := k.clientset.CoreV1().RESTClient().Post().
 		Resource("pods").
@@ -875,7 +868,6 @@ func main() {
 			printClusterResults(scanResults)
 		}
 		
-		// Auto-generate service mapping for cluster scans
 		if k8sClient != nil {
 			mappingFile := *serviceMapping
 			if mappingFile == "" && *allPods {
