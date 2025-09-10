@@ -192,3 +192,21 @@ var tlsVersionValueMap = map[string]int{
 	"VersionTLS12": 12,
 	"VersionTLS13": 13,
 }
+
+// nmapCipherToStandardCipherMap maps the cipher names from nmap's ssl-enum-ciphers script
+// to the standard cipher suite names used in OpenShift TLS security profiles.
+var nmapCipherToStandardCipherMap = map[string]string{
+	"TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256":       "TLS_AES_128_GCM_SHA256",
+	"TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256": "TLS_CHACHA20_POLY1305_SHA256",
+	"TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384":       "TLS_AES_256_GCM_SHA384",
+	"TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA":          "TLS_AES_128_CBC_SHA",
+	"TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA":          "TLS_AES_256_CBC_SHA",
+	"TLS_RSA_WITH_AES_128_GCM_SHA256":             "TLS_AES_128_GCM_SHA256",
+	"TLS_RSA_WITH_AES_256_GCM_SHA384":             "TLS_AES_256_GCM_SHA384",
+	"TLS_RSA_WITH_AES_128_CBC_SHA":                "TLS_AES_128_CBC_SHA",
+	"TLS_RSA_WITH_AES_256_CBC_SHA":                "TLS_AES_256_CBC_SHA",
+	"TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256":       "TLS_AES_128_CBC_SHA256",
+	"TLS_AKE_WITH_AES_128_GCM_SHA256":             "TLS_AES_128_GCM_SHA256",
+	"TLS_AKE_WITH_AES_256_GCM_SHA384":             "TLS_AES_256_GCM_SHA384",
+	"TLS_AKE_WITH_CHACHA20_POLY1305_SHA256":       "TLS_CHACHA20_POLY1305_SHA256",
+}
