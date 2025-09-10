@@ -89,12 +89,8 @@ func writeCSVOutput(results ScanResults, filename string) error {
 
 			port := strconv.Itoa(targetPort)
 
-			// Collect all detected ciphers and TLS versions for this port
-			var allDetectedCiphers []string
-			var tlsVersions []string
-
 			// Skip processing this row if no TLS data was found - improves performance
-			if len(allDetectedCiphers) == 0 && len(tlsVersions) == 0 {
+			if len(portResult.TlsCiphers) == 0 && len(portResult.TlsVersions) == 0 {
 				log.Printf("Skipping CSV row for %s:%s - no TLS data detected", ipAddress, port)
 				continue
 			}
