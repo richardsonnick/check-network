@@ -1622,25 +1622,12 @@ type CSVColumnInfo struct {
 	Description string
 }
 
-// All available CSV columns
-var allCSVColumns = []CSVColumnInfo{
-	{"IP", "Target IP address"},
-	{"Port", "Specific port number"},
-	{"Pod Name", "Kubernetes pod name"},
-	{"Namespace", "Kubernetes namespace"},
-	{"Process", "Process listening on port"},
-	{"TLS Ciphers", "Cipher suites detected in scan"},
-	{"TLS Version", "TLS/SSL protocol version from scan"},
-	{"TLS Configured MinVersion", "OpenShift configured minimum TLS version"},
-	{"TLS Configured Ciphers", "OpenShift configured cipher suites"},
-	{"TLS Accepted Ciphers", "Intersection of configured and detected ciphers"},
-}
-
 // Predefined column sets
+// TODO remove these sets. just use one set.
 var csvColumnSets = map[string][]string{
 	"minimal": {"IP", "Port", "TLS Version", "TLS Ciphers"},
-	"default": {"IP", "Port", "Pod Name", "Namespace", "Process", "TLS Ciphers", "TLS Version", "TLS Configured MinVersion", "TLS Configured Ciphers"},
-	"all":     {"IP", "Port", "Pod Name", "Namespace", "Process", "TLS Ciphers", "TLS Version", "TLS Configured MinVersion", "TLS Configured Ciphers", "TLS Accepted Ciphers"},
+	"default": {"IP", "Port", "Pod Name", "Namespace", "Component Name", "Component Maintainer", "Process", "TLS Ciphers", "TLS Version", "TLS Configured MinVersion", "TLS Configured Ciphers"},
+	"all":     {"IP", "Port", "Pod Name", "Namespace", "Component Name", "Component Maintainer", "Process", "TLS Ciphers", "TLS Version", "TLS Configured MinVersion", "TLS Configured Ciphers", "TLS Accepted Ciphers"},
 }
 
 // parseCSVColumns parses the CSV columns specification
@@ -1779,8 +1766,9 @@ func writeCSVOutput(results ScanResults, filename string, columnsSpec string) er
 				"Port":                      port,
 				"Pod Name":                  ipResult.Pod.Name,
 				"Namespace":                 ipResult.Pod.Namespace,
+				"Component Name":            ipResult.OpenshiftComponent.Component,
+				"Component Maintainer":      ipResult.OpenshiftComponent.MaintainerComponent,
 				"Process":                   processName,
-				"Component":                 ipResult.OpenshiftComponent.Component,
 				"TLS Ciphers":               joinOrNA(allDetectedCiphers),
 				"TLS Version":               joinOrNA(tlsVersions),
 				"TLS Configured MinVersion": joinOrNA(allConfiguredMinVersions),
