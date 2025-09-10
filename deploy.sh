@@ -59,6 +59,9 @@ cleanup() {
     oc adm policy remove-scc-from-user privileged -z default -n "$CURRENT_PROJECT" --ignore-not-found=true
     echo "--> Deleting pod-exec-reader cluster role..."
     oc delete clusterrole pod-exec-reader --ignore-not-found=true
+    echo "--> Deleting ingress-reader role and binding..."
+    oc delete role ingress-reader -n openshift-ingress-operator --ignore-not-found=true
+    oc delete rolebinding read-ingress-from-project -n openshift-ingress-operator --ignore-not-found=true
     echo "Cleanup complete."
 }
 
@@ -137,6 +140,34 @@ check_error "Creating privileged deployment"
 echo "--> Granting permissions to the service account..."
 oc adm policy add-cluster-role-to-user cluster-reader -z default -n "$CURRENT_PROJECT"
 check_error "Granting cluster-reader permissions"
+
+echo "--> Creating Role and RoleBinding to read IngressController status..."
+cat <<EOF | oc apply -f -
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ingress-reader
+  namespace: openshift-ingress-operator
+rules:
+- apiGroups: ["operator.openshift.io"]
+  resources: ["ingresscontrollers"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: read-ingress-from-project
+  namespace: openshift-ingress-operator
+subjects:
+- kind: ServiceAccount
+  name: default
+  namespace: $CURRENT_PROJECT
+roleRef:
+  kind: Role
+  name: ingress-reader
+  apiGroup: rbac.authorization.k8s.io
+EOF
+check_error "Creating ingress-reader Role and RoleBinding"
 
 echo "--> Copying global pull secret..."
 oc get secret pull-secret -n openshift-config -o yaml | sed "s/namespace: .*/namespace: $CURRENT_PROJECT/" | oc apply -n "$CURRENT_PROJECT" -f -
