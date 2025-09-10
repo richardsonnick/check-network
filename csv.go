@@ -42,7 +42,6 @@ func writeCSVOutput(results ScanResults, filename string) error {
 	var ingressProfile, ingressMinVersion, ingressCiphers string
 	var apiProfile, apiMinVersion, apiCiphers string
 	var kubeletMinVersion, kubeletCiphers string
-
 	if results.TLSSecurityConfig != nil {
 		if results.TLSSecurityConfig.IngressController != nil {
 			ingressProfile = stringOrNA(results.TLSSecurityConfig.IngressController.Type)
@@ -94,47 +93,11 @@ func writeCSVOutput(results ScanResults, filename string) error {
 			var allDetectedCiphers []string
 			var tlsVersions []string
 
-			// Extract TLS versions and ciphers from nmap script results
-			for _, host := range portResult.NmapRun.Hosts {
-				for _, nmapPort := range host.Ports {
-					for _, script := range nmapPort.Scripts {
-						if script.ID == "ssl-enum-ciphers" {
-							for _, table := range script.Tables {
-								tlsVersion := table.Key
-								if tlsVersion != "" {
-									tlsVersions = append(tlsVersions, tlsVersion)
-								}
-
-								// Find ciphers for this TLS version
-								for _, subTable := range table.Tables {
-									if subTable.Key == "ciphers" {
-										for _, cipherTable := range subTable.Tables {
-											for _, elem := range cipherTable.Elems {
-												if elem.Key == "name" && elem.Value != "" {
-													allDetectedCiphers = append(allDetectedCiphers, elem.Value)
-												}
-											}
-										}
-									}
-								}
-							}
-						}
-					}
-				}
-			}
-
-			// Remove duplicates
-			allDetectedCiphers = removeDuplicates(allDetectedCiphers)
-			tlsVersions = removeDuplicates(tlsVersions)
-
 			// Skip processing this row if no TLS data was found - improves performance
 			if len(allDetectedCiphers) == 0 && len(tlsVersions) == 0 {
 				log.Printf("Skipping CSV row for %s:%s - no TLS data detected", ipAddress, port)
 				continue
 			}
-
-			// Only get process name for rows with TLS data (already filtered in scanIPPort, but double-check)
-			processName := stringOrNA(portResult.ProcessName)
 
 			// Create row data
 			rowData := map[string]string{
@@ -144,9 +107,9 @@ func writeCSVOutput(results ScanResults, filename string) error {
 				"Namespace":                     ipResult.Pod.Namespace,
 				"Component Name":                ipResult.OpenshiftComponent.Component,
 				"Component Maintainer":          ipResult.OpenshiftComponent.MaintainerComponent,
-				"Process":                       processName,
-				"TLS Ciphers":                   joinOrNA(allDetectedCiphers),
-				"TLS Version":                   joinOrNA(tlsVersions),
+				"Process":                       stringOrNA(portResult.ProcessName),
+				"TLS Ciphers":                   joinOrNA(portResult.TlsCiphers),
+				"TLS Version":                   joinOrNA(portResult.TlsVersions),
 				"Ingress Configured Profile":    ingressProfile,
 				"Ingress Configured MinVersion": ingressMinVersion,
 				"Ingress Configured Ciphers":    ingressCiphers,

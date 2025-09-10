@@ -108,14 +108,25 @@ type PodInfo struct {
 }
 
 type PortResult struct {
-	Port          int     `json:"port"`
-	Protocol      string  `json:"protocol"`
-	State         string  `json:"state"`
-	Service       string  `json:"service"`
-	ProcessName   string  `json:"process_name,omitempty"`
-	ContainerName string  `json:"container_name,omitempty"`
-	NmapRun       NmapRun `json:"nmap_details"`
-	Error         string  `json:"error,omitempty"`
+	Port                         int                        `json:"port"`
+	Protocol                     string                     `json:"protocol"`
+	State                        string                     `json:"state"`
+	Service                      string                     `json:"service"`
+	ProcessName                  string                     `json:"process_name,omitempty"`
+	ContainerName                string                     `json:"container_name,omitempty"`
+	NmapRun                      NmapRun                    `json:"nmap_details"` // deprecated
+	TlsVersions                  []string                   `json:"tls_versions,omitempty"`
+	TlsCiphers                   []string                   `json:"tls_ciphers,omitempty"`
+	TlsCipherStrength            map[string]string          `json:"tls_cipher_strength,omitempty"`
+	Error                        string                     `json:"error,omitempty"`
+	IngressTLSConfigCompliance   *TLSConfigComplianceResult `json:"ingress_tls_config_compliance,omitempty"`
+	APIServerTLSConfigCompliance *TLSConfigComplianceResult `json:"api_server_tls_config_compliance,omitempty"`
+	KubeletTLSConfigCompliance   *TLSConfigComplianceResult `json:"kubelet_tls_config_compliance,omitempty"`
+}
+
+type TLSConfigComplianceResult struct {
+	Version bool `json:"version"`
+	Ciphers bool `json:"ciphers"`
 }
 
 type OpenshiftComponent struct {

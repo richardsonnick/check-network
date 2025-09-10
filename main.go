@@ -228,7 +228,79 @@ func discoverOpenPorts(ip string) ([]int, error) {
 	return ports, nil
 }
 
-func scanIPPort(ip string, port int, k8sClient *K8sClient, pod PodInfo, scanResults *ScanResults) (PortResult, error) {
+func checkCompliance(portResult *PortResult, tlsProfile *TLSSecurityProfile) {
+	// Check ingress config compliance
+	// if ingress := tlsProfile.IngressController; tlsProfile.IngressController != nil {
+	// 	if ingress.MinTLSVersion != "" {
+	// 		portResultMinVersion = getMinVersion(portResult.)
+	// 		portResults.IngressTLSConfigCompliance.Version =
+	// 	}
+	// }
+
+	// // Check api config compliance
+	// if tlsProfile.APIServer != nil {
+
+	// }
+
+	// // Check kubelet config compliance
+	// if tlsProfile.KubeletConfig != nil {
+
+	// }
+}
+
+func extractTLSInfo(nmapRun NmapRun) (versions []string, ciphers []string, cipherStrength map[string]string) {
+	// Collect all detected ciphers and TLS versions for this port
+	var allDetectedCiphers []string
+	var tlsVersions []string
+	cipherStrength = make(map[string]string) // TODO currently unused. Might be useful
+
+	// Extract TLS versions and ciphers from nmap script results
+	for _, host := range nmapRun.Hosts {
+		for _, nmapPort := range host.Ports {
+			for _, script := range nmapPort.Scripts {
+				if script.ID == "ssl-enum-ciphers" {
+					for _, table := range script.Tables {
+						tlsVersion := table.Key
+						if tlsVersion != "" {
+							tlsVersions = append(tlsVersions, tlsVersion)
+						}
+
+						// Find ciphers for this TLS version
+						for _, subTable := range table.Tables {
+							if subTable.Key == "ciphers" {
+								var currentCipherName string
+								var currentCipherStrength string
+								for _, cipherTable := range subTable.Tables {
+									currentCipherName = ""
+									currentCipherStrength = ""
+									for _, elem := range cipherTable.Elems {
+										if elem.Key == "name" {
+											currentCipherName = elem.Value
+										} else if elem.Key == "strength" {
+											currentCipherStrength = elem.Value
+										}
+									}
+									if currentCipherName != "" && currentCipherStrength != "" {
+										allDetectedCiphers = append(allDetectedCiphers, currentCipherName)
+										cipherStrength[currentCipherName] = currentCipherStrength
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Remove duplicates
+	allDetectedCiphers = removeDuplicates(allDetectedCiphers)
+	tlsVersions = removeDuplicates(tlsVersions)
+
+	return tlsVersions, allDetectedCiphers, cipherStrength
+}
+
+func scanIPPort(ip string, port int, k8sClient *K8sClient, pod PodInfo) (PortResult, error) {
 	log.Printf("Scanning SSL ciphers on %s:%d", ip, port)
 
 	cmd := exec.Command("nmap", "-sV", "--script", "ssl-enum-ciphers", "-p", strconv.Itoa(port), "-oX", "-", ip)
@@ -284,6 +356,8 @@ func scanIPPort(ip string, port int, k8sClient *K8sClient, pod PodInfo, scanResu
 			}
 		}
 	}
+
+	result.TlsVersions, result.TlsCiphers, result.TlsCipherStrength = extractTLSInfo(nmapResult)
 
 	// Only do process detection if we found TLS data
 	if k8sClient != nil && hasTLSData && len(pod.Containers) > 0 {
