@@ -1427,20 +1427,6 @@ func scanIP(k8sClient *K8sClient, ip string, pod PodInfo, scanResults *ScanResul
 	return ipResult
 }
 
-// Helper function to extract service names for logging
-func getServiceNames(services []ServiceInfo) []string {
-	names := make([]string, len(services))
-	for i, service := range services {
-		names[i] = fmt.Sprintf("%s/%s", service.Namespace, service.Name)
-	}
-	return names
-}
-
-// parseCSVColumns parses the CSV columns specification
-func parseCSVColumns(spec string) []string {
-	return csvColumns
-}
-
 // writeCSVOutput writes scan results to a CSV file with one row per IP/port combination
 func writeCSVOutput(results ScanResults, filename string) error {
 	log.Printf("Writing CSV output to: %s", filename)
