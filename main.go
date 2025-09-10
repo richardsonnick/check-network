@@ -285,21 +285,13 @@ func checkCipherCompliance(gotCiphers []string, expectedCiphers []string) bool {
 		expectedSet[c] = struct{}{}
 	}
 
-	gotSet := make(map[string]struct{}, len(gotCiphers))
-	for _, cipher := range gotCiphers {
-		if converted, ok := nmapCipherToStandardCipherMap[cipher]; ok {
-			gotSet[converted] = struct{}{}
-		} else {
-			gotSet[cipher] = struct{}{}
-		}
-	}
-
-	if len(gotSet) != len(expectedSet) {
+	if len(gotCiphers) == 0 && len(expectedCiphers) > 0 {
 		return false
 	}
 
-	for cipher := range gotSet {
-		if _, ok := expectedSet[cipher]; !ok {
+	for _, cipher := range gotCiphers {
+		convertedCipher := nmapCipherToStandardCipherMap[cipher]
+		if _, exists := expectedSet[convertedCipher]; !exists {
 			return false
 		}
 	}
@@ -530,7 +522,7 @@ func scanIP(k8sClient *K8sClient, ip string, pod PodInfo, tlsSecurityProfile *TL
 				Protocol: nmapPort.Protocol,
 				State:    nmapPort.State.State,
 				Service:  nmapPort.Service.Name,
-				NmapRun:  NmapRun{Hosts: []Host{{Ports: []Port{nmapPort}}}}, // Create a mini-NmapRun for this port
+				NmapRun:  NmapRun{Hosts: []Host{{Ports: []Port{nmapPort}}}},
 			}
 			portResult.TlsVersions, portResult.TlsCiphers, portResult.TlsCipherStrength = extractTLSInfo(portResult.NmapRun)
 			resultsByPort[nmapPort.PortID] = portResult

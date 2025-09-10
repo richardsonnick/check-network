@@ -7,13 +7,13 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 
 	configv1 "github.com/openshift/api/config/v1"
 	configclientset "github.com/openshift/client-go/config/clientset/versioned"
+	mcfgclientset "github.com/openshift/client-go/machineconfiguration/clientset/versioned"
 	operatorclientset "github.com/openshift/client-go/operator/clientset/versioned"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -50,6 +50,11 @@ func newK8sClient() (*K8sClient, error) {
 		return nil, fmt.Errorf("could not create openshift operator client: %v", err)
 	}
 
+	mcfgClient, err := mcfgclientset.NewForConfig(config)
+	if err != nil {
+		return nil, fmt.Errorf("could not create openshift machineconfig client: %v", err)
+	}
+
 	namespace := "default" // Or get from config
 	if nsBytes, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace"); err == nil {
 		namespace = string(nsBytes)
@@ -64,6 +69,7 @@ func newK8sClient() (*K8sClient, error) {
 		namespace:                 namespace,
 		configClient:              configClient,
 		operatorClient:            operatorClient,
+		mcfgClient:                mcfgClient,
 	}, nil
 }
 
@@ -450,114 +456,37 @@ func (k *K8sClient) getAPIServerTLS() (*APIServerTLSProfile, error) {
 	return profile, nil
 }
 
-// getKubeletTLS gets TLS configuration from Kubelet config file
+// getKubeletTLS gets the cluster-wide configured Kubelet TLS profile.
 func (k *K8sClient) getKubeletTLS() (*KubeletTLSProfile, error) {
-	// Since we need to access the host filesystem, we'll try to get this from a node
-	// This assumes the scanner is running in a privileged pod with host access
-	kubeletConfigPath := "/host/etc/kubernetes/kubelet.conf"
-
-	// First try to read from host mount
-	content, err := os.ReadFile(kubeletConfigPath)
+	kubeletConfigs, err := k.mcfgClient.MachineconfigurationV1().KubeletConfigs().List(context.Background(), metav1.ListOptions{})
 	if err != nil {
-		// Fallback: try to exec into a node or get config via API
-		log.Printf("Could not read kubelet config from %s: %v, trying alternative method", kubeletConfigPath, err)
-		return k.getKubeletTLSFromNode()
+		return nil, fmt.Errorf("failed to list KubeletConfigs: %v", err)
 	}
 
-	rawContent := string(content)
-	profile := &KubeletTLSProfile{
-		Raw: rawContent,
-	}
+	// In a standard cluster, we are looking for the KubeletConfig that contains the TLS profile.
+	// There might be multiple, but typically one will have the desired spec.
+	for _, kc := range kubeletConfigs.Items {
+		if kc.Spec.TLSSecurityProfile != nil {
+			profile := &KubeletTLSProfile{}
+			tlsProfile := kc.Spec.TLSSecurityProfile
 
-	// Parse JSON-like content for TLS settings
-	lines := strings.Split(rawContent, "\n")
-
-	for _, line := range lines {
-		trimmedLine := strings.TrimSpace(line)
-
-		if strings.Contains(trimmedLine, `"tlsCipherSuites"`) {
-			// Extract cipher suites array
-			if cipherStart := strings.Index(trimmedLine, "["); cipherStart != -1 {
-				if cipherEnd := strings.Index(trimmedLine, "]"); cipherEnd != -1 {
-					cipherStr := trimmedLine[cipherStart+1 : cipherEnd]
-					ciphers := strings.Split(cipherStr, ",")
-					for _, cipher := range ciphers {
-						cleanCipher := strings.Trim(strings.TrimSpace(cipher), `"`)
-						if cleanCipher != "" {
-							profile.TLSCipherSuites = append(profile.TLSCipherSuites, cleanCipher)
-						}
-					}
+			if tlsProfile.Type == configv1.TLSProfileCustomType {
+				if custom := tlsProfile.Custom; custom != nil {
+					profile.TLSCipherSuites = custom.TLSProfileSpec.Ciphers
+					profile.MinTLSVersion = string(custom.TLSProfileSpec.MinTLSVersion)
+				}
+			} else if tlsProfile.Type != "" {
+				// For built-in profiles, get the spec from the configv1 constants
+				if predefined, ok := configv1.TLSProfiles[tlsProfile.Type]; ok {
+					profile.TLSCipherSuites = predefined.Ciphers
+					profile.MinTLSVersion = string(predefined.MinTLSVersion)
 				}
 			}
-		} else if strings.Contains(trimmedLine, `"tlsMinVersion"`) {
-			// Extract minimum TLS version
-			if colonIndex := strings.Index(trimmedLine, ":"); colonIndex != -1 {
-				versionPart := strings.TrimSpace(trimmedLine[colonIndex+1:])
-				profile.MinTLSVersion = strings.Trim(versionPart, `",`)
-			}
+			return profile, nil
 		}
 	}
 
-	return profile, nil
-}
-
-// getKubeletTLSFromNode attempts to get kubelet config by executing commands on a node
-func (k *K8sClient) getKubeletTLSFromNode() (*KubeletTLSProfile, error) {
-	// Get a list of nodes
-	nodes, err := k.clientset.CoreV1().Nodes().List(context.Background(), metav1.ListOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("failed to list nodes: %v", err)
-	}
-
-	if len(nodes.Items) == 0 {
-		return nil, fmt.Errorf("no nodes found")
-	}
-
-	// Try to get kubelet config from the first node
-	nodeName := nodes.Items[0].Name
-
-	// Create a debug pod on the node to read the kubelet config
-	cmd := exec.Command("oc", "debug", "node/"+nodeName, "--", "cat", "/host/etc/kubernetes/kubelet.conf")
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return nil, fmt.Errorf("failed to read kubelet config from node %s: %v", nodeName, err)
-	}
-
-	rawOutput := string(output)
-	profile := &KubeletTLSProfile{
-		Raw: rawOutput,
-	}
-
-	// Parse the kubelet config similar to the direct file read method
-	lines := strings.Split(rawOutput, "\n")
-
-	for _, line := range lines {
-		trimmedLine := strings.TrimSpace(line)
-
-		if strings.Contains(trimmedLine, `"tlsCipherSuites"`) {
-			// Extract cipher suites array
-			if cipherStart := strings.Index(trimmedLine, "["); cipherStart != -1 {
-				if cipherEnd := strings.Index(trimmedLine, "]"); cipherEnd != -1 {
-					cipherStr := trimmedLine[cipherStart+1 : cipherEnd]
-					ciphers := strings.Split(cipherStr, ",")
-					for _, cipher := range ciphers {
-						cleanCipher := strings.Trim(strings.TrimSpace(cipher), `"`)
-						if cleanCipher != "" {
-							profile.TLSCipherSuites = append(profile.TLSCipherSuites, cleanCipher)
-						}
-					}
-				}
-			}
-		} else if strings.Contains(trimmedLine, `"tlsMinVersion"`) {
-			// Extract minimum TLS version
-			if colonIndex := strings.Index(trimmedLine, ":"); colonIndex != -1 {
-				versionPart := strings.TrimSpace(trimmedLine[colonIndex+1:])
-				profile.MinTLSVersion = strings.Trim(versionPart, `",`)
-			}
-		}
-	}
-
-	return profile, nil
+	return nil, fmt.Errorf("no KubeletConfig with a TLSSecurityProfile found in the cluster")
 }
 
 func (k *K8sClient) getAllPodsInfo() []PodInfo {

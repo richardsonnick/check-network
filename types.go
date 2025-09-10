@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	configclientset "github.com/openshift/client-go/config/clientset/versioned"
+	mcfgclientset "github.com/openshift/client-go/machineconfiguration/clientset/versioned"
 	operatorclientset "github.com/openshift/client-go/operator/clientset/versioned"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
@@ -166,13 +167,14 @@ type KubeletTLSProfile struct {
 type K8sClient struct {
 	clientset                 *kubernetes.Clientset
 	restCfg                   *rest.Config
-	podIPMap                  map[string]v1.Pod         // IP -> PodName
-	processNameMap            map[string]map[int]string // IP -> Port -> Process Name
-	processDiscoveryAttempted map[string]bool           // Pod Name -> bool
+	podIPMap                  map[string]v1.Pod
+	processNameMap            map[string]map[int]string
+	processDiscoveryAttempted map[string]bool
 	processCacheMutex         sync.Mutex
 	namespace                 string
 	configClient              *configclientset.Clientset
 	operatorClient            *operatorclientset.Clientset
+	mcfgClient                *mcfgclientset.Clientset
 }
 
 var tlsVersionMap = map[string]string{
@@ -193,19 +195,19 @@ var tlsVersionValueMap = map[string]int{
 	"VersionTLS13": 13,
 }
 
+// TODO fix this. The mapping from nmap to tls config is not very clear.
 // nmapCipherToStandardCipherMap maps the cipher names from nmap's ssl-enum-ciphers script
 // to the standard cipher suite names used in OpenShift TLS security profiles.
 var nmapCipherToStandardCipherMap = map[string]string{
-
 	// Intermediate ciphers
-	"TLS_AES_128_GCM_SHA256": "TLS_AES_128_GCM_SHA256",
-	"TLS_AES_256_GCM_SHA384": "TLS_AES_256_GCM_SHA384",
+	"TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256": "TLS_AES_128_GCM_SHA256",
+	"TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384": "TLS_AES_256_GCM_SHA384",
 
-	"TLS_CHACHA20_POLY1305_SHA256":  "TLS_CHACHA20_POLY1305_SHA256",
-	"ECDHE-ECDSA-AES128-GCM-SHA256": "ECDHE-ECDSA-AES128-GCM-SHA256",
+	"TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256": "TLS_CHACHA20_POLY1305_SHA256",
+	"ECDHE-ECDSA-AES128-GCM-SHA256":               "ECDHE-ECDSA-AES128-GCM-SHA256",
 
-	"ECDHE-RSA-AES128-GCM-SHA256":   "ECDHE-RSA-AES128-GCM-SHA256",
-	"ECDHE-ECDSA-AES256-GCM-SHA384": "ECDHE-ECDSA-AES256-GCM-SHA384",
+	"ECDHE-RSA-AES128-GCM-SHA256": "ECDHE-RSA-AES128-GCM-SHA256",
+	// "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384": "ECDHE-ECDSA-AES256-GCM-SHA384",
 
 	"ECDHE-RSA-AES256-GCM-SHA384":   "ECDHE-RSA-AES256-GCM-SHA384",
 	"ECDHE-ECDSA-CHACHA20-POLY1305": "ECDHE-ECDSA-CHACHA20-POLY1305",
