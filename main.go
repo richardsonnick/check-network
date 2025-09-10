@@ -249,6 +249,11 @@ func checkCompliance(portResult *PortResult, tlsProfile *TLSSecurityProfile) {
 		portResultMinVersion = getMinVersionValue(portResult.TlsVersions)
 	}
 
+	// TODO potentially wasteful memory allocations here
+	portResult.IngressTLSConfigCompliance = &TLSConfigComplianceResult{}
+	portResult.APIServerTLSConfigCompliance = &TLSConfigComplianceResult{}
+	portResult.KubeletTLSConfigCompliance = &TLSConfigComplianceResult{}
+
 	if ingress := tlsProfile.IngressController; tlsProfile.IngressController != nil {
 		if ingress.MinTLSVersion != "" {
 			ingressMinVersion := tlsVersionValueMap[ingress.MinTLSVersion]
