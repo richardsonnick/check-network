@@ -370,88 +370,6 @@ func extractTLSInfo(nmapRun NmapRun) (versions []string, ciphers []string, ciphe
 	return tlsVersions, allDetectedCiphers, cipherStrength
 }
 
-func scanIPPort(ip string, port int, k8sClient *K8sClient, pod PodInfo) (PortResult, error) {
-	log.Printf("Scanning SSL ciphers on %s:%d", ip, port)
-
-	cmd := exec.Command("nmap", "-sV", "--script", "ssl-enum-ciphers", "-p", strconv.Itoa(port), "-oX", "-", ip)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return PortResult{
-			Port:  port,
-			Error: fmt.Sprintf("nmap scan failed: %v", err),
-		}, nil
-	}
-
-	var nmapResult NmapRun
-	if err := xml.Unmarshal(output, &nmapResult); err != nil {
-		return PortResult{
-			Port:  port,
-			Error: fmt.Sprintf("failed to parse nmap XML: %v", err),
-		}, nil
-	}
-
-	result := PortResult{
-		Port:    port,
-		NmapRun: nmapResult,
-	}
-
-	if len(nmapResult.Hosts) > 0 {
-		for _, nmapPort := range nmapResult.Hosts[0].Ports {
-			if nmapPort.PortID == strconv.Itoa(port) {
-				result.Protocol = nmapPort.Protocol
-				result.State = nmapPort.State.State
-				result.Service = nmapPort.Service.Name
-				break
-			}
-		}
-	}
-
-	// Check if TLS data was found before doing expensive process name detection
-	hasTLSData := false
-	if len(nmapResult.Hosts) > 0 {
-		for _, host := range nmapResult.Hosts {
-			for _, nmapPort := range host.Ports {
-				for _, script := range nmapPort.Scripts {
-					if script.ID == "ssl-enum-ciphers" && len(script.Tables) > 0 {
-						hasTLSData = true
-						break
-					}
-				}
-				if hasTLSData {
-					break
-				}
-			}
-			if hasTLSData {
-				break
-			}
-		}
-	}
-
-	result.TlsVersions, result.TlsCiphers, result.TlsCipherStrength = extractTLSInfo(nmapResult)
-
-	// Only do process detection if we found TLS data
-	if k8sClient != nil && hasTLSData && len(pod.Containers) > 0 {
-		// Discover processes for this pod on-demand
-		k8sClient.getAndCachePodProcesses(pod)
-
-		// Look up from the now-populated cache
-		k8sClient.processCacheMutex.Lock()
-		if processName, ok := k8sClient.processNameMap[ip][port]; ok {
-			result.ProcessName = processName
-			// Since we don't know the exact container, we can leave it blank or list all
-			result.ContainerName = strings.Join(pod.Containers, ",")
-			log.Printf("Found process '%s' for %s:%d from cache", processName, ip, port)
-		} else {
-			log.Printf("Could not find process for %s:%d in cache", ip, port)
-		}
-		k8sClient.processCacheMutex.Unlock()
-	} else if !hasTLSData {
-		log.Printf("Skipping process name detection for %s:%d - no TLS data found. Nmap output: %s", ip, port, string(output))
-	}
-
-	return result, nil
-}
-
 func performClusterScan(allPodsInfo []PodInfo, concurrentScans int, k8sClient *K8sClient) ScanResults {
 	startTime := time.Now()
 
@@ -547,12 +465,22 @@ func performClusterScan(allPodsInfo []PodInfo, concurrentScans int, k8sClient *K
 }
 
 func scanIP(k8sClient *K8sClient, ip string, pod PodInfo, tlsSecurityProfile *TLSSecurityProfile) IPResult {
-	ports, err := discoverOpenPorts(ip)
+	openPorts, err := discoverOpenPorts(ip)
 	if err != nil {
 		return IPResult{
 			IP:     ip,
+			Pod:    &pod,
 			Status: "error",
-			Error:  err.Error(),
+			Error:  fmt.Sprintf("port discovery failed: %v", err),
+		}
+	}
+
+	if len(openPorts) == 0 {
+		return IPResult{
+			IP:        ip,
+			Pod:       &pod,
+			Status:    "scanned",
+			OpenPorts: []int{},
 		}
 	}
 
@@ -560,21 +488,77 @@ func scanIP(k8sClient *K8sClient, ip string, pod PodInfo, tlsSecurityProfile *TL
 		IP:          ip,
 		Pod:         &pod,
 		Status:      "scanned",
-		OpenPorts:   ports,
-		PortResults: make([]PortResult, 0, len(ports)),
+		OpenPorts:   openPorts,
+		PortResults: make([]PortResult, 0, len(openPorts)),
 	}
 
-	// Scan each open port for SSL ciphers
-	for _, port := range ports {
-		portResult, err := scanIPPort(ip, port, k8sClient, pod)
-		if err != nil {
-			portResult = PortResult{
-				Port:  port,
-				Error: err.Error(),
-			}
+	// Convert port numbers to a comma-separated string for nmap
+	portStrings := make([]string, len(openPorts))
+	for i, p := range openPorts {
+		portStrings[i] = strconv.Itoa(p)
+	}
+	portSpec := strings.Join(portStrings, ",")
+
+	log.Printf("Scanning %d SSL ciphers on %s for ports: %s", len(openPorts), ip, portSpec)
+	cmd := exec.Command("nmap", "-sV", "--script", "ssl-enum-ciphers", "-p", portSpec, "-oX", "-", ip)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		ipResult.Error = fmt.Sprintf("nmap scan failed: %v", err)
+		// Still create PortResult entries for CSV consistency
+		for _, port := range openPorts {
+			ipResult.PortResults = append(ipResult.PortResults, PortResult{Port: port, Error: "nmap scan failed"})
 		}
-		checkCompliance(&portResult, tlsSecurityProfile)
-		ipResult.PortResults = append(ipResult.PortResults, portResult)
+		return ipResult
+	}
+
+	var nmapResult NmapRun
+	if err := xml.Unmarshal(output, &nmapResult); err != nil {
+		ipResult.Error = fmt.Sprintf("failed to parse nmap XML: %v", err)
+		for _, port := range openPorts {
+			ipResult.PortResults = append(ipResult.PortResults, PortResult{Port: port, Error: "nmap xml parse failed"})
+		}
+		return ipResult
+	}
+
+	// Create a map of port results from the single nmap run
+	resultsByPort := make(map[string]PortResult)
+	if len(nmapResult.Hosts) > 0 {
+		for _, nmapPort := range nmapResult.Hosts[0].Ports {
+			portNum, _ := strconv.Atoi(nmapPort.PortID)
+			portResult := PortResult{
+				Port:     portNum,
+				Protocol: nmapPort.Protocol,
+				State:    nmapPort.State.State,
+				Service:  nmapPort.Service.Name,
+				NmapRun:  NmapRun{Hosts: []Host{{Ports: []Port{nmapPort}}}}, // Create a mini-NmapRun for this port
+			}
+			portResult.TlsVersions, portResult.TlsCiphers, portResult.TlsCipherStrength = extractTLSInfo(portResult.NmapRun)
+			resultsByPort[nmapPort.PortID] = portResult
+		}
+	}
+
+	// Correlate results with discovered ports
+	for _, port := range openPorts {
+		if portResult, ok := resultsByPort[strconv.Itoa(port)]; ok {
+			// Check compliance and get process info if TLS data was found
+			if len(portResult.TlsCiphers) > 0 {
+				checkCompliance(&portResult, tlsSecurityProfile)
+
+				if k8sClient != nil && len(pod.Containers) > 0 {
+					k8sClient.getAndCachePodProcesses(pod)
+					k8sClient.processCacheMutex.Lock()
+					if processName, ok := k8sClient.processNameMap[ip][port]; ok {
+						portResult.ProcessName = processName
+						portResult.ContainerName = strings.Join(pod.Containers, ",")
+					}
+					k8sClient.processCacheMutex.Unlock()
+				}
+			}
+			ipResult.PortResults = append(ipResult.PortResults, portResult)
+		} else {
+			// Port was discovered but not in the ssl-enum-ciphers result (e.g., not an SSL port)
+			ipResult.PortResults = append(ipResult.PortResults, PortResult{Port: port, State: "open"})
+		}
 	}
 
 	return ipResult
