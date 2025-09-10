@@ -17,7 +17,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	v1 "k8s.io/api/core/v1"
@@ -791,8 +790,6 @@ func main() {
 	if len(allPodsInfo) > 0 {
 		var scanResults ScanResults
 
-		// If CSV output is requested, we need the full results, so use regular scan
-		// If only JSON is requested, use streaming for better performance
 		if *csvOutput != "" {
 			scanResults = performClusterScan(allPodsInfo, *concurrentScans, k8sClient)
 
@@ -827,10 +824,6 @@ func main() {
 			if *jsonOutput == "" {
 				printClusterResults(scanResults)
 			}
-		} else if *jsonOutput != "" {
-			// JSON-only output, use streaming for performance
-			performClusterScanWithStreaming(allPodsInfo, *jsonOutput, *concurrentScans, k8sClient)
-			log.Printf("Scan complete. Results written to: %s", *jsonOutput)
 		} else {
 			// Console output only
 			scanResults = performClusterScan(allPodsInfo, *concurrentScans, k8sClient)
@@ -1243,146 +1236,6 @@ func performClusterScan(allPodsInfo []PodInfo, concurrentScans int, k8sClient *K
 	fmt.Printf("========================================\n")
 
 	return results
-}
-
-// TODO remove
-// performClusterScanWithStreaming performs cluster scan and writes results incrementally to JSON file
-func performClusterScanWithStreaming(allPodsInfo []PodInfo, outputFile string, concurrentScans int, k8sClient *K8sClient) {
-	startTime := time.Now()
-
-	totalIPs := 0
-	for _, pod := range allPodsInfo {
-		totalIPs += len(pod.IPs)
-	}
-
-	fmt.Printf("========================================\n")
-	fmt.Printf("CONCURRENT STREAMING SCAN STARTING\n")
-	fmt.Printf("========================================\n")
-	fmt.Printf("Total Pods to scan: %d\n", len(allPodsInfo))
-	fmt.Printf("Total IPs to scan: %d\n", totalIPs)
-	fmt.Printf("Concurrent workers: %d\n", concurrentScans)
-	fmt.Printf("Output file: %s\n", outputFile)
-	fmt.Printf("========================================\n\n")
-
-	// Create channels for work distribution and result collection
-	podChan := make(chan PodInfo, len(allPodsInfo))
-	resultChan := make(chan IPResult, totalIPs)
-
-	var wg sync.WaitGroup
-	var processedPods int64 // Atomic counter for processed pods
-
-	// Start worker goroutines
-	for w := 0; w < concurrentScans; w++ {
-		workerID := w + 1
-		log.Printf("Starting STREAMING WORKER %d", workerID)
-		wg.Add(1)
-		go func(workerID int) {
-			defer wg.Done()
-			for pod := range podChan {
-				currentPod := atomic.AddInt64(&processedPods, 1)
-				log.Printf("STREAMING WORKER %d: Processing Pod %d/%d: %s/%s", workerID, currentPod, len(allPodsInfo), pod.Namespace, pod.Name)
-
-				// Get OpenShift component information using Kubernetes API
-				component, err := k8sClient.getOpenshiftComponentFromImage(pod.Image)
-				if err != nil {
-					log.Printf("Could not get openshift component for image %s: %v", pod.Image, err)
-					component = nil
-				}
-
-				for _, ip := range pod.IPs {
-					// TODO just pass the pod not each ip. this is dumb. The pod itself contains all ips for that pod. wtf
-					ipResult := scanIP(k8sClient, ip, pod, nil) // Pass nil for streaming - errors won't be collected
-					ipResult.OpenshiftComponent = component
-					resultChan <- ipResult
-				}
-				log.Printf("STREAMING WORKER %d: Completed Pod %d/%d: %s/%s", workerID, currentPod, len(allPodsInfo), pod.Namespace, pod.Name)
-			}
-			log.Printf("STREAMING WORKER %d: FINISHED", workerID)
-		}(workerID)
-	}
-
-	// Collect TLS security configuration from cluster
-	var tlsConfig *TLSSecurityProfile
-	if k8sClient != nil {
-		if config, err := k8sClient.getTLSSecurityProfile(); err != nil {
-			log.Printf("Warning: Could not collect TLS security profiles: %v", err)
-		} else {
-			tlsConfig = config
-		}
-	}
-
-	// Start a goroutine to collect results and write them to the file
-	var collectorWg sync.WaitGroup
-	collectorWg.Add(1)
-	go func() {
-		defer collectorWg.Done()
-		results := ScanResults{
-			Timestamp:         startTime.Format(time.RFC3339),
-			TotalIPs:          totalIPs,
-			IPResults:         make([]IPResult, 0, totalIPs),
-			TLSSecurityConfig: tlsConfig,
-		}
-
-		file, err := os.Create(outputFile)
-		if err != nil {
-			log.Fatalf("Error creating output file: %v", err)
-		}
-		defer file.Close()
-
-		// Write the initial structure
-		file.WriteString("{\n")
-		file.WriteString(fmt.Sprintf("  \"timestamp\": \"%s\",\n", results.Timestamp))
-		file.WriteString(fmt.Sprintf("  \"total_ips\": %d,\n", results.TotalIPs))
-		file.WriteString("  \"scanned_ips\": 0,\n")
-		file.WriteString("  \"ip_results\": [\n")
-
-		isFirstResult := true
-		for i := 0; i < totalIPs; i++ {
-			ipResult := <-resultChan
-			results.IPResults = append(results.IPResults, ipResult)
-			results.ScannedIPs++
-
-			jsonData, err := json.MarshalIndent(ipResult, "    ", "  ")
-			if err != nil {
-				log.Printf("Error marshaling IP result: %v", err)
-				continue
-			}
-
-			if !isFirstResult {
-				file.WriteString(",\n")
-			}
-			file.WriteString("    " + string(jsonData))
-			isFirstResult = false
-		}
-
-		// Write the final structure
-		file.WriteString("\n  ]\n}\n")
-	}()
-
-	// Send PodInfo to workers
-	for _, pod := range allPodsInfo {
-		podChan <- pod
-	}
-	close(podChan)
-
-	// Wait for all workers to complete
-	wg.Wait()
-	close(resultChan)
-
-	// Wait for the collector to finish writing
-	collectorWg.Wait()
-
-	duration := time.Since(startTime)
-
-	fmt.Printf("\n========================================\n")
-	fmt.Printf("CONCURRENT STREAMING SCAN COMPLETE!\n")
-	fmt.Printf("========================================\n")
-	fmt.Printf("Total IPs processed: %d\n", totalIPs)
-	fmt.Printf("Total time: %v\n", duration)
-	fmt.Printf("Concurrent workers used: %d\n", concurrentScans)
-	fmt.Printf("Average time per IP: %.2fs\n", duration.Seconds()/float64(totalIPs))
-	fmt.Printf("Output file: %s\n", outputFile)
-	fmt.Printf("========================================\n")
 }
 
 func printClusterResults(results ScanResults) {
