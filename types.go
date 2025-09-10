@@ -4,6 +4,8 @@ import (
 	"encoding/xml"
 	"sync"
 
+	configclientset "github.com/openshift/client-go/config/clientset/versioned"
+	operatorclientset "github.com/openshift/client-go/operator/clientset/versioned"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -158,4 +160,6 @@ type K8sClient struct {
 	processDiscoveryAttempted map[string]bool           // Pod Name -> bool
 	processCacheMutex         sync.Mutex
 	namespace                 string
+	configClient              *configclientset.Clientset
+	operatorClient            *operatorclientset.Clientset
 }

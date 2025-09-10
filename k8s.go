@@ -12,6 +12,9 @@ import (
 	"strconv"
 	"strings"
 
+	configv1 "github.com/openshift/api/config/v1"
+	configclientset "github.com/openshift/client-go/config/clientset/versioned"
+	operatorclientset "github.com/openshift/client-go/operator/clientset/versioned"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -37,6 +40,16 @@ func newK8sClient() (*K8sClient, error) {
 		return nil, err
 	}
 
+	configClient, err := configclientset.NewForConfig(config)
+	if err != nil {
+		return nil, fmt.Errorf("could not create openshift config client: %v", err)
+	}
+
+	operatorClient, err := operatorclientset.NewForConfig(config)
+	if err != nil {
+		return nil, fmt.Errorf("could not create openshift operator client: %v", err)
+	}
+
 	namespace := "default" // Or get from config
 	if nsBytes, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace"); err == nil {
 		namespace = string(nsBytes)
@@ -49,6 +62,8 @@ func newK8sClient() (*K8sClient, error) {
 		processNameMap:            make(map[string]map[int]string),
 		processDiscoveryAttempted: make(map[string]bool),
 		namespace:                 namespace,
+		configClient:              configClient,
+		operatorClient:            operatorClient,
 	}, nil
 }
 
@@ -361,51 +376,36 @@ func (k *K8sClient) getTLSSecurityProfile() (*TLSSecurityProfile, error) {
 
 // getIngressControllerTLS gets TLS configuration from Ingress Controller
 func (k *K8sClient) getIngressControllerTLS() (*IngressTLSProfile, error) {
-	cmd := exec.Command("oc", "describe", "IngressController", "default", "-n", "openshift-ingress-operator")
-	output, err := cmd.CombinedOutput()
+	ingress, err := k.operatorClient.OperatorV1().IngressControllers("openshift-ingress-operator").Get(context.Background(), "default", metav1.GetOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("failed to get ingress controller config: %v", err)
+		return nil, fmt.Errorf("failed to get IngressController custom resource: %v", err)
 	}
 
-	rawOutput := string(output)
-	profile := &IngressTLSProfile{
-		Raw: rawOutput,
+	profile := &IngressTLSProfile{}
+
+	// "If unset, the default is based on the apiservers.config.openshift.io/cluster resource."
+	// TODO make this just use the API Server TLS profile if not set here?
+	if ingress.Spec.TLSSecurityProfile == nil {
+		profile.Type = "API Config Server Default"
+		return profile, nil
 	}
 
-	// Parse TLS security profile information
-	lines := strings.Split(rawOutput, "\n")
-	inTLSSection := false
-
-	for _, line := range lines {
-		trimmedLine := strings.TrimSpace(line)
-
-		// Look for TLS Security Profile section
-		if strings.Contains(trimmedLine, "Tls Security Profile:") {
-			inTLSSection = true
-			continue
-		}
-
-		if inTLSSection {
-			// Stop if we hit another major section
-			if strings.HasSuffix(trimmedLine, ":") && !strings.Contains(trimmedLine, "Type:") &&
-				!strings.Contains(trimmedLine, "Min TLS Version:") && !strings.Contains(trimmedLine, "Ciphers:") {
-				break
-			}
-
-			if strings.Contains(trimmedLine, "Type:") {
-				profile.Type = strings.TrimSpace(strings.Split(trimmedLine, "Type:")[1])
-			} else if strings.Contains(trimmedLine, "Min TLS Version:") {
-				profile.MinTLSVersion = strings.TrimSpace(strings.Split(trimmedLine, "Min TLS Version:")[1])
-			} else if strings.Contains(trimmedLine, "Ciphers:") {
-				cipherLine := strings.TrimSpace(strings.Split(trimmedLine, "Ciphers:")[1])
-				if cipherLine != "" {
-					profile.Ciphers = strings.Split(cipherLine, ",")
-					for i, cipher := range profile.Ciphers {
-						profile.Ciphers[i] = strings.TrimSpace(cipher)
-					}
-				}
-			}
-		}
+	profile.Type = string(ingress.Spec.TLSSecurityProfile.Type)
+	if custom := ingress.Spec.TLSSecurityProfile.Custom; custom != nil {
+		profile.Ciphers = custom.TLSProfileSpec.Ciphers
+		profile.MinTLSVersion = string(custom.TLSProfileSpec.MinTLSVersion)
+	}
+	if ingress.Spec.TLSSecurityProfile.Type == configv1.TLSProfileOldType {
+		profile.Ciphers = configv1.TLSProfiles[configv1.TLSProfileOldType].Ciphers
+		profile.MinTLSVersion = string(configv1.TLSProfiles[configv1.TLSProfileOldType].MinTLSVersion)
+	}
+	if ingress.Spec.TLSSecurityProfile.Type == configv1.TLSProfileIntermediateType {
+		profile.Ciphers = configv1.TLSProfiles[configv1.TLSProfileIntermediateType].Ciphers
+		profile.MinTLSVersion = string(configv1.TLSProfiles[configv1.TLSProfileIntermediateType].MinTLSVersion)
+	}
+	if ingress.Spec.TLSSecurityProfile.Type == configv1.TLSProfileModernType {
+		profile.Ciphers = configv1.TLSProfiles[configv1.TLSProfileModernType].Ciphers
+		profile.MinTLSVersion = string(configv1.TLSProfiles[configv1.TLSProfileModernType].MinTLSVersion)
 	}
 
 	return profile, nil
@@ -413,51 +413,37 @@ func (k *K8sClient) getIngressControllerTLS() (*IngressTLSProfile, error) {
 
 // getAPIServerTLS gets TLS configuration from API Server
 func (k *K8sClient) getAPIServerTLS() (*APIServerTLSProfile, error) {
-	cmd := exec.Command("oc", "describe", "apiserver", "cluster")
-	output, err := cmd.CombinedOutput()
+	apiserver, err := k.configClient.ConfigV1().APIServers().Get(context.Background(), "cluster", metav1.GetOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("failed to get API server config: %v", err)
+		return nil, fmt.Errorf("failed to get APIServer custom resource: %v", err)
 	}
 
-	rawOutput := string(output)
-	profile := &APIServerTLSProfile{
-		Raw: rawOutput,
+	profile := &APIServerTLSProfile{}
+
+	// If unset, a default (which may change between releases) is chosen. Note that only Old,
+	// Intermediate and Custom profiles are currently supported, and the maximum available
+	// minTLSVersion is VersionTLS12.
+	if apiserver.Spec.TLSSecurityProfile == nil {
+		profile.Type = "Default"
+		return profile, nil
 	}
 
-	// Parse TLS security profile information
-	lines := strings.Split(rawOutput, "\n")
-	inTLSSection := false
-
-	for _, line := range lines {
-		trimmedLine := strings.TrimSpace(line)
-
-		// Look for TLS Security Profile section
-		if strings.Contains(trimmedLine, "Tls Security Profile:") {
-			inTLSSection = true
-			continue
-		}
-
-		if inTLSSection {
-			// Stop if we hit another major section
-			if strings.HasSuffix(trimmedLine, ":") && !strings.Contains(trimmedLine, "Type:") &&
-				!strings.Contains(trimmedLine, "Min TLS Version:") && !strings.Contains(trimmedLine, "Ciphers:") {
-				break
-			}
-
-			if strings.Contains(trimmedLine, "Type:") {
-				profile.Type = strings.TrimSpace(strings.Split(trimmedLine, "Type:")[1])
-			} else if strings.Contains(trimmedLine, "Min TLS Version:") {
-				profile.MinTLSVersion = strings.TrimSpace(strings.Split(trimmedLine, "Min TLS Version:")[1])
-			} else if strings.Contains(trimmedLine, "Ciphers:") {
-				cipherLine := strings.TrimSpace(strings.Split(trimmedLine, "Ciphers:")[1])
-				if cipherLine != "" {
-					profile.Ciphers = strings.Split(cipherLine, ",")
-					for i, cipher := range profile.Ciphers {
-						profile.Ciphers[i] = strings.TrimSpace(cipher)
-					}
-				}
-			}
-		}
+	profile.Type = string(apiserver.Spec.TLSSecurityProfile.Type)
+	if custom := apiserver.Spec.TLSSecurityProfile.Custom; custom != nil {
+		profile.Ciphers = custom.TLSProfileSpec.Ciphers
+		profile.MinTLSVersion = string(custom.TLSProfileSpec.MinTLSVersion)
+	}
+	if apiserver.Spec.TLSSecurityProfile.Type == configv1.TLSProfileOldType {
+		profile.Ciphers = configv1.TLSProfiles[configv1.TLSProfileOldType].Ciphers
+		profile.MinTLSVersion = string(configv1.TLSProfiles[configv1.TLSProfileOldType].MinTLSVersion)
+	}
+	if apiserver.Spec.TLSSecurityProfile.Type == configv1.TLSProfileIntermediateType {
+		profile.Ciphers = configv1.TLSProfiles[configv1.TLSProfileIntermediateType].Ciphers
+		profile.MinTLSVersion = string(configv1.TLSProfiles[configv1.TLSProfileIntermediateType].MinTLSVersion)
+	}
+	if apiserver.Spec.TLSSecurityProfile.Type == configv1.TLSProfileModernType {
+		profile.Ciphers = configv1.TLSProfiles[configv1.TLSProfileModernType].Ciphers
+		profile.MinTLSVersion = string(configv1.TLSProfiles[configv1.TLSProfileModernType].MinTLSVersion)
 	}
 
 	return profile, nil

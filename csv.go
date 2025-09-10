@@ -10,7 +10,11 @@ import (
 )
 
 var csvColumns = []string{
-	"IP", "Port", "Pod Name", "Namespace", "Component Name", "Component Maintainer", "Process", "TLS Ciphers", "TLS Version", "TLS Configured MinVersion", "TLS Configured Ciphers",
+	"IP", "Port", "Pod Name", "Namespace", "Component Name", "Component Maintainer",
+	"Process", "TLS Ciphers", "TLS Version",
+	"Ingress Configured Profile", "Ingress Configured MinVersion", "Ingress Configured Ciphers",
+	"API Configured Profile", "API Configured MinVersion", "API Configured Ciphers",
+	"Kubelet Configured MinVersion", "Kubelet Configured Ciphers",
 }
 
 // writeCSVOutput writes scan results to a CSV file with one row per IP/port combination
@@ -31,32 +35,50 @@ func writeCSVOutput(results ScanResults, filename string) error {
 		return fmt.Errorf("failed to write CSV header: %v", err)
 	}
 
-	// Collect all configured cipher suites and minimum versions from TLS security profiles
-	var allConfiguredCiphers []string
-	var allConfiguredMinVersions []string
+	rowCount := 0
+
+	// Defensive checks for nil TLSSecurityConfig
+	// TODO initialize these values in the results struct to avoid this mess.
+	var ingressProfile, ingressMinVersion, ingressCiphers string
+	var apiProfile, apiMinVersion, apiCiphers string
+	var kubeletMinVersion, kubeletCiphers string
+
 	if results.TLSSecurityConfig != nil {
 		if results.TLSSecurityConfig.IngressController != nil {
-			allConfiguredCiphers = append(allConfiguredCiphers, results.TLSSecurityConfig.IngressController.Ciphers...)
-			if results.TLSSecurityConfig.IngressController.MinTLSVersion != "" {
-				allConfiguredMinVersions = append(allConfiguredMinVersions, results.TLSSecurityConfig.IngressController.MinTLSVersion)
-			}
+			ingressProfile = stringOrNA(results.TLSSecurityConfig.IngressController.Type)
+			ingressMinVersion = stringOrNA(results.TLSSecurityConfig.IngressController.MinTLSVersion)
+			ingressCiphers = joinOrNA(removeDuplicates(results.TLSSecurityConfig.IngressController.Ciphers))
+		} else {
+			ingressProfile = "N/A"
+			ingressMinVersion = "N/A"
+			ingressCiphers = "N/A"
 		}
 		if results.TLSSecurityConfig.APIServer != nil {
-			allConfiguredCiphers = append(allConfiguredCiphers, results.TLSSecurityConfig.APIServer.Ciphers...)
-			if results.TLSSecurityConfig.APIServer.MinTLSVersion != "" {
-				allConfiguredMinVersions = append(allConfiguredMinVersions, results.TLSSecurityConfig.APIServer.MinTLSVersion)
-			}
+			apiProfile = stringOrNA(results.TLSSecurityConfig.APIServer.Type)
+			apiMinVersion = stringOrNA(results.TLSSecurityConfig.APIServer.MinTLSVersion)
+			apiCiphers = joinOrNA(removeDuplicates(results.TLSSecurityConfig.APIServer.Ciphers))
+		} else {
+			apiProfile = "N/A"
+			apiMinVersion = "N/A"
+			apiCiphers = "N/A"
 		}
 		if results.TLSSecurityConfig.KubeletConfig != nil {
-			allConfiguredCiphers = append(allConfiguredCiphers, results.TLSSecurityConfig.KubeletConfig.TLSCipherSuites...)
-			if results.TLSSecurityConfig.KubeletConfig.TLSMinVersion != "" {
-				allConfiguredMinVersions = append(allConfiguredMinVersions, results.TLSSecurityConfig.KubeletConfig.TLSMinVersion)
-			}
+			kubeletMinVersion = stringOrNA(results.TLSSecurityConfig.KubeletConfig.TLSMinVersion)
+			kubeletCiphers = joinOrNA(removeDuplicates(results.TLSSecurityConfig.KubeletConfig.TLSCipherSuites))
+		} else {
+			kubeletMinVersion = "N/A"
+			kubeletCiphers = "N/A"
 		}
+	} else {
+		ingressProfile = "N/A"
+		ingressMinVersion = "N/A"
+		ingressCiphers = "N/A"
+		apiProfile = "N/A"
+		apiMinVersion = "N/A"
+		apiCiphers = "N/A"
+		kubeletMinVersion = "N/A"
+		kubeletCiphers = "N/A"
 	}
-	// Remove duplicates from configured ciphers and min versions
-	allConfiguredCiphers = removeDuplicates(allConfiguredCiphers)
-	allConfiguredMinVersions = removeDuplicates(allConfiguredMinVersions)
 
 	// Write data rows - one row per IP/port combination
 	for _, ipResult := range results.IPResults {
@@ -116,23 +138,30 @@ func writeCSVOutput(results ScanResults, filename string) error {
 
 			// Create row data
 			rowData := map[string]string{
-				"IP":                        ipAddress,
-				"Port":                      port,
-				"Pod Name":                  ipResult.Pod.Name,
-				"Namespace":                 ipResult.Pod.Namespace,
-				"Component Name":            ipResult.OpenshiftComponent.Component,
-				"Component Maintainer":      ipResult.OpenshiftComponent.MaintainerComponent,
-				"Process":                   processName,
-				"TLS Ciphers":               joinOrNA(allDetectedCiphers),
-				"TLS Version":               joinOrNA(tlsVersions),
-				"TLS Configured MinVersion": joinOrNA(allConfiguredMinVersions),
-				"TLS Configured Ciphers":    joinOrNA(allConfiguredCiphers),
+				"IP":                            ipAddress,
+				"Port":                          port,
+				"Pod Name":                      ipResult.Pod.Name,
+				"Namespace":                     ipResult.Pod.Namespace,
+				"Component Name":                ipResult.OpenshiftComponent.Component,
+				"Component Maintainer":          ipResult.OpenshiftComponent.MaintainerComponent,
+				"Process":                       processName,
+				"TLS Ciphers":                   joinOrNA(allDetectedCiphers),
+				"TLS Version":                   joinOrNA(tlsVersions),
+				"Ingress Configured Profile":    ingressProfile,
+				"Ingress Configured MinVersion": ingressMinVersion,
+				"Ingress Configured Ciphers":    ingressCiphers,
+				"API Configured Profile":        apiProfile,
+				"API Configured MinVersion":     apiMinVersion,
+				"API Configured Ciphers":        apiCiphers,
+				"Kubelet Configured MinVersion": kubeletMinVersion,
+				"Kubelet Configured Ciphers":    kubeletCiphers,
 			}
 
 			row := buildCSVRow(csvColumns, rowData)
 			if err := writer.Write(row); err != nil {
 				return fmt.Errorf("failed to write CSV row: %v", err)
 			}
+			rowCount++
 		}
 
 	}
