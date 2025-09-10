@@ -174,7 +174,6 @@ type K8sClient struct {
 	clientset                 *kubernetes.Clientset
 	restCfg                   *rest.Config
 	podIPMap                  map[string]v1.Pod         // IP -> PodName
-	serviceIPMap              map[string][]ServiceInfo  // IP -> Services mapping
 	processNameMap            map[string]map[int]string // IP -> Port -> Process Name
 	processDiscoveryAttempted map[string]bool           // Pod Name -> bool
 	processCacheMutex         sync.Mutex
@@ -206,73 +205,10 @@ func newK8sClient() (*K8sClient, error) {
 		clientset:                 clientset,
 		restCfg:                   config,
 		podIPMap:                  make(map[string]v1.Pod),
-		serviceIPMap:              make(map[string][]ServiceInfo),
 		processNameMap:            make(map[string]map[int]string),
 		processDiscoveryAttempted: make(map[string]bool),
 		namespace:                 namespace,
 	}, nil
-}
-
-// TODO This is heavy consider removing
-func (k *K8sClient) discoverServices() error {
-	log.Printf("Discovering services and endpoints in all namespaces")
-
-	// Get all services
-	services, err := k.clientset.CoreV1().Services("").List(context.Background(), metav1.ListOptions{})
-	if err != nil {
-		return fmt.Errorf("failed to list services: %v", err)
-	}
-
-	// Get all endpoints
-	endpoints, err := k.clientset.CoreV1().Endpoints("").List(context.Background(), metav1.ListOptions{})
-	if err != nil {
-		return fmt.Errorf("failed to list endpoints: %v", err)
-	}
-
-	// Build service map
-	serviceMap := make(map[string]v1.Service)
-	for _, svc := range services.Items {
-		key := fmt.Sprintf("%s/%s", svc.Namespace, svc.Name)
-		serviceMap[key] = svc
-	}
-
-	// Map endpoints to services
-	for _, ep := range endpoints.Items {
-		serviceKey := fmt.Sprintf("%s/%s", ep.Namespace, ep.Name)
-		service, exists := serviceMap[serviceKey]
-		if !exists {
-			continue
-		}
-
-		// Extract service ports
-		var servicePorts []int
-		for _, port := range service.Spec.Ports {
-			servicePorts = append(servicePorts, int(port.Port))
-		}
-
-		serviceInfo := ServiceInfo{
-			Name:      service.Name,
-			Namespace: service.Namespace,
-			Type:      string(service.Spec.Type),
-			Ports:     servicePorts,
-		}
-
-		// Map all endpoint IPs to this service
-		for _, subset := range ep.Subsets {
-			for _, address := range subset.Addresses {
-				if address.IP != "" {
-					k.serviceIPMap[address.IP] = append(k.serviceIPMap[address.IP], serviceInfo)
-				}
-			}
-		}
-	}
-
-	totalMappings := 0
-	for _, services := range k.serviceIPMap {
-		totalMappings += len(services)
-	}
-	log.Printf("Discovered %d service-to-IP mappings across %d unique IPs", totalMappings, len(k.serviceIPMap))
-	return nil
 }
 
 func (k *K8sClient) getOpenshiftComponentFromImage(image string) (*OpenshiftComponent, error) {
@@ -804,7 +740,6 @@ func main() {
 	csvColumns := flag.String("csv-columns", "default", "CSV columns to include: 'all', 'default', 'minimal', or comma-separated list")
 	concurrentScans := flag.Int("j", 1, "Number of concurrent scans to run in parallel (speeds up large IP lists significantly!)")
 	allPods := flag.Bool("all-pods", false, "Scan all pods in the current namespace (overrides --iplist and --host)")
-	serviceMapping := flag.String("service-mapping", "", "Generate service-to-IP mapping JSON file (optional)")
 	limitIPs := flag.Int("limit-ips", 0, "Limit the number of IPs to scan for testing purposes (0 = no limit)")
 	flag.Parse()
 
@@ -897,27 +832,6 @@ func main() {
 			// Console output only
 			scanResults = performClusterScan(allPodsInfo, *concurrentScans, k8sClient)
 			printClusterResults(scanResults)
-		}
-
-		if k8sClient != nil {
-			mappingFile := *serviceMapping
-			if mappingFile == "" && *allPods {
-				// Auto-generate mapping file for cluster scans
-				mappingFile = "service-to-pod-ip-mapping.json"
-
-				// If outputting to /tmp (like in pod), put service mapping there too
-				if *csvOutput != "" && strings.HasPrefix(*csvOutput, "/tmp/") {
-					mappingFile = "/tmp/service-to-pod-ip-mapping.json"
-				}
-			}
-
-			if mappingFile != "" {
-				if err := k8sClient.generateServiceMapping(mappingFile); err != nil {
-					log.Printf("Error generating service mapping: %v", err)
-				} else {
-					log.Printf("Service mapping written to: %s", mappingFile)
-				}
-			}
 		}
 
 		return
@@ -1591,10 +1505,6 @@ func (k *K8sClient) getAllPodsInfo() []PodInfo {
 		}
 	}
 
-	if err := k.discoverServices(); err != nil {
-		log.Printf("Error discovering services: %v", err)
-	}
-
 	infos := make([]PodInfo, 0, len(pods.Items))
 	for _, pod := range pods.Items {
 		if pod.Status.PodIP == "" || pod.Status.Phase != v1.PodRunning {
@@ -1682,15 +1592,6 @@ func scanIP(k8sClient *K8sClient, ip string, pod PodInfo, scanResults *ScanResul
 		PortResults: make([]PortResult, 0, len(ports)),
 	}
 
-	// Add service information if available
-	// TODO fuck services for now
-	// if k8sClient != nil {
-	// 	if services, exists := k8sClient.serviceIPMap[ip]; exists {
-	// 		ipResult.Services = services
-	// 		log.Printf("Found %d services for IP %s: %v", len(services), ip, getServiceNames(services))
-	// 	}
-	// }
-
 	// Scan each open port for SSL ciphers
 	for _, port := range ports {
 		portResult, err := scanIPPort(ip, port, k8sClient, pod, scanResults)
@@ -1713,68 +1614,6 @@ func getServiceNames(services []ServiceInfo) []string {
 		names[i] = fmt.Sprintf("%s/%s", service.Namespace, service.Name)
 	}
 	return names
-}
-
-// ServiceToIPMapping represents the service-to-IP mapping structure
-type ServiceToIPMapping struct {
-	ServiceName string   `json:"service_name"`
-	Namespace   string   `json:"namespace"`
-	PodIPs      []string `json:"pod_ips"`
-}
-
-// generateServiceMapping creates a service-to-IP mapping file similar to the oc command output
-func (k *K8sClient) generateServiceMapping(filename string) error {
-	log.Printf("Generating service-to-IP mapping file: %s", filename)
-
-	// Build reverse mapping from service to IPs
-	serviceToIPs := make(map[string][]string)
-
-	for ip, services := range k.serviceIPMap {
-		for _, service := range services {
-			key := fmt.Sprintf("%s/%s", service.Namespace, service.Name)
-			serviceToIPs[key] = append(serviceToIPs[key], ip)
-		}
-	}
-
-	// Convert to the expected output format
-	var mappings []ServiceToIPMapping
-	for serviceKey, ips := range serviceToIPs {
-		parts := strings.Split(serviceKey, "/")
-		if len(parts) == 2 {
-			// Remove duplicates and sort
-			uniqueIPs := make(map[string]bool)
-			for _, ip := range ips {
-				uniqueIPs[ip] = true
-			}
-
-			var sortedIPs []string
-			for ip := range uniqueIPs {
-				sortedIPs = append(sortedIPs, ip)
-			}
-
-			mappings = append(mappings, ServiceToIPMapping{
-				ServiceName: parts[1],
-				Namespace:   parts[0],
-				PodIPs:      sortedIPs,
-			})
-		}
-	}
-
-	// Write to file
-	file, err := os.Create(filename)
-	if err != nil {
-		return fmt.Errorf("failed to create service mapping file: %v", err)
-	}
-	defer file.Close()
-
-	encoder := json.NewEncoder(file)
-	encoder.SetIndent("", "  ")
-	if err := encoder.Encode(mappings); err != nil {
-		return fmt.Errorf("failed to write service mapping JSON: %v", err)
-	}
-
-	log.Printf("Successfully generated service mapping with %d services", len(mappings))
-	return nil
 }
 
 // CSVColumnInfo defines metadata for CSV columns
@@ -1881,28 +1720,7 @@ func writeCSVOutput(results ScanResults, filename string, columnsSpec string) er
 
 		// Process each port result
 		for _, portResult := range ipResult.PortResults {
-			// Extract pod name and namespace from services that actually listen on this specific port
 			targetPort := portResult.Port
-
-			// TODO remove this maybe this is dumb
-			// for _, service := range ipResult.Services {
-			// 	// Check if this service listens on this specific port
-			// 	serviceListensOnPort := false
-			// 	for _, svcPort := range service.Ports {
-			// 		if svcPort == targetPort {
-			// 			serviceListensOnPort = true
-			// 			break
-			// 		}
-			// 	}
-
-			// 	if serviceListensOnPort {
-			// 		log.Printf("Mapping port %d on IP %s to service %s/%s\n", targetPort, ipAddress, service.Namespace, service.Name)
-			// 		podNames = append(podNames, service.Name) // TODO this should be pod name, not service name
-			// 		namespaces = append(namespaces, service.Namespace)
-			// 	} else {
-			// 		log.Printf("Service %s/%s does not listen on port %d, skipping for this port\n", service.Namespace, service.Name, targetPort)
-			// 	}
-			// }
 
 			port := strconv.Itoa(targetPort)
 
@@ -1960,7 +1778,6 @@ func writeCSVOutput(results ScanResults, filename string, columnsSpec string) er
 				"IP":                        ipAddress,
 				"Port":                      port,
 				"Pod Name":                  ipResult.Pod.Name,
-				"Services":                  joinOrNA(getServiceNames(ipResult.Services)),
 				"Namespace":                 ipResult.Pod.Namespace,
 				"Process":                   processName,
 				"Component":                 ipResult.OpenshiftComponent.Component,
@@ -1978,37 +1795,6 @@ func writeCSVOutput(results ScanResults, filename string, columnsSpec string) er
 			rowCount++
 		}
 
-		// TODO remove this dumb shit.
-		// If no port results but IP has data, add a row with N/A for port-specific data
-		if len(ipResult.PortResults) == 0 {
-			// For IPs with no ports found, collect all service names since we don't know the specific port
-			var podNames, namespaces []string
-			for _, service := range ipResult.Services {
-				podNames = append(podNames, service.Name)
-				namespaces = append(namespaces, service.Namespace)
-			}
-			podName := joinOrNA(removeDuplicates(podNames))
-			namespace := joinOrNA(removeDuplicates(namespaces))
-
-			rowData := map[string]string{
-				"IP":                        ipAddress,
-				"Port":                      "N/A",
-				"Pod Name":                  podName,
-				"Namespace":                 namespace,
-				"Component":                 ipResult.OpenshiftComponent.Component,
-				"Process":                   "N/A",
-				"TLS Ciphers":               "N/A",
-				"TLS Version":               "N/A",
-				"TLS Configured MinVersion": joinOrNA(allConfiguredMinVersions),
-				"TLS Configured Ciphers":    joinOrNA(allConfiguredCiphers),
-				"TLS Accepted Ciphers":      "N/A",
-			}
-			row := buildCSVRow(selectedColumns, rowData)
-			if err := writer.Write(row); err != nil {
-				return fmt.Errorf("failed to write CSV row: %v", err)
-			}
-			rowCount++
-		}
 	}
 
 	log.Printf("Successfully wrote %d rows to CSV file with columns: %v", rowCount, selectedColumns)
