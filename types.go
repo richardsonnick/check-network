@@ -174,3 +174,21 @@ type K8sClient struct {
 	configClient              *configclientset.Clientset
 	operatorClient            *operatorclientset.Clientset
 }
+
+var tlsVersionMap = map[string]string{
+	"TLSv1.0": "VersionTLS10",
+	"TLSv1.1": "VersionTLS11",
+	"TLSv1.2": "VersionTLS12",
+	"TLSv1.3": "VersionTLS13",
+}
+
+var tlsVersionValueMap = map[string]int{
+	"TLSv1.0":      10,
+	"TLSv1.1":      11,
+	"TLSv1.2":      12,
+	"TLSv1.3":      13,
+	"VersionTLS10": 10,
+	"VersionTLS11": 11,
+	"VersionTLS12": 12,
+	"VersionTLS13": 13,
+}
