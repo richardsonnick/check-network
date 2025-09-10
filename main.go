@@ -1394,42 +1394,6 @@ func (k *K8sClient) getAllPodsInfo() []PodInfo {
 	return infos
 }
 
-func buildPodInfoFromIPs(ips []string, k8sClient *K8sClient) []PodInfo {
-	if k8sClient == nil {
-		// No k8s client, just return basic info
-		infos := make([]PodInfo, len(ips))
-		for i, ip := range ips {
-			infos[i] = PodInfo{IPs: []string{ip}}
-		}
-		return infos
-	}
-
-	infos := make([]PodInfo, 0, len(ips))
-	for _, ip := range ips {
-		if pod, found := k8sClient.podIPMap[ip]; found {
-			var containerNames []string
-			var image string
-			if len(pod.Spec.Containers) > 0 {
-				image = pod.Spec.Containers[0].Image
-				for _, c := range pod.Spec.Containers {
-					containerNames = append(containerNames, c.Name)
-				}
-			}
-			infos = append(infos, PodInfo{
-				Name:       pod.Name,
-				Namespace:  pod.Namespace,
-				Image:      image,
-				IPs:        []string{ip},
-				Containers: containerNames,
-			})
-		} else {
-			// IP not found in map, treat as external
-			infos = append(infos, PodInfo{IPs: []string{ip}})
-		}
-	}
-	return infos
-}
-
 func scanIP(k8sClient *K8sClient, ip string, pod PodInfo, scanResults *ScanResults) IPResult {
 	ports, err := discoverOpenPorts(ip)
 	if err != nil {
