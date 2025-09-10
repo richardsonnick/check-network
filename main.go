@@ -229,9 +229,10 @@ func newK8sClient() (*K8sClient, error) {
 // 	return nil
 // }
 
+// TODO This is heavy consider removing
 func (k *K8sClient) discoverServices() error {
 	log.Printf("Discovering services and endpoints in all namespaces")
-	
+
 	// Get all services
 	services, err := k.clientset.CoreV1().Services("").List(context.Background(), metav1.ListOptions{})
 	if err != nil {
@@ -305,10 +306,8 @@ func (k *K8sClient) getOpenshiftComponentFromImage(image string) (*OpenshiftComp
 	return k.getComponentFromClusterMetadata(image)
 }
 
-
 // TODO: This is much different than how check-payload does it...
 // https://github.com/openshift/check-payload/blob/1c3541964ab045305b9754305e99ab80d35da8e4/internal/podman/podman.go#L157
-
 func (k *K8sClient) parseOpenshiftComponentFromImageRef(image string) *OpenshiftComponent {
 	// Handle OpenShift release images - similar to check-payload approach
 	if strings.Contains(image, "quay.io/openshift-release-dev") {
@@ -317,9 +316,9 @@ func (k *K8sClient) parseOpenshiftComponentFromImageRef(image string) *Openshift
 		component := &OpenshiftComponent{
 			SourceLocation:      "quay.io/openshift-release-dev",
 			MaintainerComponent: "openshift",
-			IsBundle:           false,
+			IsBundle:            false,
 		}
-		
+
 		// Parse component name from image path or labels we might find
 		if strings.Contains(image, "oauth-openshift") {
 			component.Component = "oauth-openshift"
@@ -331,7 +330,7 @@ func (k *K8sClient) parseOpenshiftComponentFromImageRef(image string) *Openshift
 			// Default component name from sha or extract from known patterns
 			component.Component = "openshift-component"
 		}
-		
+
 		return component
 	}
 
@@ -343,7 +342,7 @@ func (k *K8sClient) parseOpenshiftComponentFromImageRef(image string) *Openshift
 				Component:           parts[len(parts)-1], // Use image name as component
 				SourceLocation:      "internal-registry",
 				MaintainerComponent: "user",
-				IsBundle:           false,
+				IsBundle:            false,
 			}
 		}
 	}
@@ -354,7 +353,7 @@ func (k *K8sClient) parseOpenshiftComponentFromImageRef(image string) *Openshift
 			Component:           k.extractComponentNameFromImage(image),
 			SourceLocation:      k.extractRegistryFromImage(image),
 			MaintainerComponent: "redhat",
-			IsBundle:           false,
+			IsBundle:            false,
 		}
 	}
 
@@ -364,7 +363,7 @@ func (k *K8sClient) parseOpenshiftComponentFromImageRef(image string) *Openshift
 func (k *K8sClient) getComponentFromClusterMetadata(image string) (*OpenshiftComponent, error) {
 	// Try to find pods using this image and extract metadata
 	log.Printf("Searching cluster for pods using image: %s", image)
-	
+
 	pods, err := k.clientset.CoreV1().Pods("").List(context.Background(), metav1.ListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to list pods for image metadata: %v", err)
@@ -379,7 +378,7 @@ func (k *K8sClient) getComponentFromClusterMetadata(image string) (*OpenshiftCom
 					Component:           k.extractComponentFromPod(pod, container),
 					SourceLocation:      k.extractRegistryFromImage(image),
 					MaintainerComponent: k.extractMaintainerFromPod(pod),
-					IsBundle:           false,
+					IsBundle:            false,
 				}
 				return component, nil
 			}
@@ -390,8 +389,8 @@ func (k *K8sClient) getComponentFromClusterMetadata(image string) (*OpenshiftCom
 	return &OpenshiftComponent{
 		Component:           k.extractComponentNameFromImage(image),
 		SourceLocation:      "unknown",
-		MaintainerComponent: "unknown", 
-		IsBundle:           false,
+		MaintainerComponent: "unknown",
+		IsBundle:            false,
 	}, nil
 }
 
@@ -461,14 +460,23 @@ func max(a, b int) int {
 	return b
 }
 
-func (k *K8sClient) getProcessNameFromPod(podName, namespace, containerName string, port int) (string, error) {
-	// Get process name from port
-	command := []string{"/bin/sh", "-c", fmt.Sprintf("lsof -i :%d -sTCP:LISTEN -P -n -F c | grep '^c' | cut -c 2- | head -n 1", port)}
+// getProcessMapForPod executes a single lsof command to get all listening ports and processes for a pod
+func (k *K8sClient) getProcessMapForPod(pod PodInfo) (map[string]map[int]string, error) {
+	processMap := make(map[string]map[int]string)
+	if len(pod.Containers) == 0 {
+		return processMap, nil
+	}
+
+	// lsof command to get port and command name for all listening TCP ports
+	command := []string{"/bin/sh", "-c", "lsof -i -sTCP:LISTEN -P -n -F cn"}
+
+	// We only need to run this in one container, as networking is shared across the pod
+	containerName := pod.Containers[0]
 
 	req := k.clientset.CoreV1().RESTClient().Post().
 		Resource("pods").
-		Name(podName).
-		Namespace(namespace).
+		Name(pod.Name).
+		Namespace(pod.Namespace).
 		SubResource("exec")
 
 	req.VersionedParams(&v1.PodExecOptions{
@@ -482,7 +490,7 @@ func (k *K8sClient) getProcessNameFromPod(podName, namespace, containerName stri
 
 	exec, err := remotecommand.NewSPDYExecutor(k.restCfg, "POST", req.URL())
 	if err != nil {
-		return "", fmt.Errorf("failed to create executor: %v", err)
+		return nil, fmt.Errorf("failed to create executor for pod %s: %v", pod.Name, err)
 	}
 
 	var stdout, stderr bytes.Buffer
@@ -492,47 +500,101 @@ func (k *K8sClient) getProcessNameFromPod(podName, namespace, containerName stri
 	})
 
 	if err != nil {
-		return "", fmt.Errorf("exec failed: %v, stderr: %s", err, stderr.String())
+		return nil, fmt.Errorf("exec failed on pod %s: %v, stderr: %s", pod.Name, err, stderr.String())
 	}
 
-	fmt.Printf("Pre truncated Process name: %s\n", stdout.String())
+	// Parse the lsof output
+	scanner := bufio.NewScanner(&stdout)
+	var currentProcess string
+	for scanner.Scan() {
+		line := scanner.Text()
+		if len(line) > 1 {
+			fieldType := line[0]
+			fieldValue := line[1:]
 
-	processName := strings.TrimSpace(stdout.String())
-	if processName == "" {
-		return "", fmt.Errorf("process not found in container %s for port %d", containerName, port)
+			switch fieldType {
+			case 'c':
+				currentProcess = fieldValue
+			case 'n':
+				// Format is expected to be something like *:port or IP:port
+				parts := strings.Split(fieldValue, ":")
+				if len(parts) == 2 {
+					portStr := parts[1]
+					port, err := strconv.Atoi(portStr)
+					if err == nil {
+						// Map all pod IPs to this port and process
+						for _, ip := range pod.IPs {
+							if _, ok := processMap[ip]; !ok {
+								processMap[ip] = make(map[int]string)
+							}
+							processMap[ip][port] = currentProcess
+						}
+					}
+				}
+			}
+		}
 	}
 
-	return processName, nil
+	return processMap, nil
 }
 
+func (k *K8sClient) getAndCachePodProcesses(pod PodInfo) {
+	k.processCacheMutex.Lock()
+	if k.processDiscoveryAttempted[pod.Name] {
+		k.processCacheMutex.Unlock()
+		return // Discovery already attempted for this pod
+	}
+	// Mark as attempted before unlocking to prevent other goroutines from trying
+	k.processDiscoveryAttempted[pod.Name] = true
+	k.processCacheMutex.Unlock()
+
+	processMap, err := k.getProcessMapForPod(pod)
+	if err != nil {
+		log.Printf("Could not get process map for pod %s/%s: %v", pod.Namespace, pod.Name, err)
+		return
+	}
+
+	if len(processMap) > 0 {
+		k.processCacheMutex.Lock()
+		defer k.processCacheMutex.Unlock()
+		for ip, portMap := range processMap {
+			if _, ok := k.processNameMap[ip]; !ok {
+				k.processNameMap[ip] = make(map[int]string)
+			}
+			for port, process := range portMap {
+				k.processNameMap[ip][port] = process
+			}
+		}
+	}
+}
 
 // getTLSSecurityProfile collects TLS security profile configurations from OpenShift components
 func (k *K8sClient) getTLSSecurityProfile() (*TLSSecurityProfile, error) {
 	log.Printf("Collecting TLS security profiles from OpenShift components...")
-	
+
 	profile := &TLSSecurityProfile{}
-	
+
 	// Collect Ingress Controller TLS configuration
 	if ingressTLS, err := k.getIngressControllerTLS(); err != nil {
 		log.Printf("Warning: Could not get Ingress Controller TLS config: %v", err)
 	} else {
 		profile.IngressController = ingressTLS
 	}
-	
-	// Collect API Server TLS configuration  
+
+	// Collect API Server TLS configuration
 	if apiServerTLS, err := k.getAPIServerTLS(); err != nil {
 		log.Printf("Warning: Could not get API Server TLS config: %v", err)
 	} else {
 		profile.APIServer = apiServerTLS
 	}
-	
+
 	// Collect Kubelet TLS configuration
 	if kubeletTLS, err := k.getKubeletTLS(); err != nil {
 		log.Printf("Warning: Could not get Kubelet TLS config: %v", err)
 	} else {
 		profile.KubeletConfig = kubeletTLS
 	}
-	
+
 	return profile, nil
 }
 
@@ -543,32 +605,32 @@ func (k *K8sClient) getIngressControllerTLS() (*IngressTLSProfile, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to get ingress controller config: %v", err)
 	}
-	
+
 	rawOutput := string(output)
 	profile := &IngressTLSProfile{
 		Raw: rawOutput,
 	}
-	
+
 	// Parse TLS security profile information
 	lines := strings.Split(rawOutput, "\n")
 	inTLSSection := false
-	
+
 	for _, line := range lines {
 		trimmedLine := strings.TrimSpace(line)
-		
+
 		// Look for TLS Security Profile section
 		if strings.Contains(trimmedLine, "Tls Security Profile:") {
 			inTLSSection = true
 			continue
 		}
-		
+
 		if inTLSSection {
 			// Stop if we hit another major section
-			if strings.HasSuffix(trimmedLine, ":") && !strings.Contains(trimmedLine, "Type:") && 
-			   !strings.Contains(trimmedLine, "Min TLS Version:") && !strings.Contains(trimmedLine, "Ciphers:") {
+			if strings.HasSuffix(trimmedLine, ":") && !strings.Contains(trimmedLine, "Type:") &&
+				!strings.Contains(trimmedLine, "Min TLS Version:") && !strings.Contains(trimmedLine, "Ciphers:") {
 				break
 			}
-			
+
 			if strings.Contains(trimmedLine, "Type:") {
 				profile.Type = strings.TrimSpace(strings.Split(trimmedLine, "Type:")[1])
 			} else if strings.Contains(trimmedLine, "Min TLS Version:") {
@@ -584,7 +646,7 @@ func (k *K8sClient) getIngressControllerTLS() (*IngressTLSProfile, error) {
 			}
 		}
 	}
-	
+
 	return profile, nil
 }
 
@@ -595,32 +657,32 @@ func (k *K8sClient) getAPIServerTLS() (*APIServerTLSProfile, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to get API server config: %v", err)
 	}
-	
+
 	rawOutput := string(output)
 	profile := &APIServerTLSProfile{
 		Raw: rawOutput,
 	}
-	
+
 	// Parse TLS security profile information
 	lines := strings.Split(rawOutput, "\n")
 	inTLSSection := false
-	
+
 	for _, line := range lines {
 		trimmedLine := strings.TrimSpace(line)
-		
+
 		// Look for TLS Security Profile section
 		if strings.Contains(trimmedLine, "Tls Security Profile:") {
 			inTLSSection = true
 			continue
 		}
-		
+
 		if inTLSSection {
 			// Stop if we hit another major section
-			if strings.HasSuffix(trimmedLine, ":") && !strings.Contains(trimmedLine, "Type:") && 
-			   !strings.Contains(trimmedLine, "Min TLS Version:") && !strings.Contains(trimmedLine, "Ciphers:") {
+			if strings.HasSuffix(trimmedLine, ":") && !strings.Contains(trimmedLine, "Type:") &&
+				!strings.Contains(trimmedLine, "Min TLS Version:") && !strings.Contains(trimmedLine, "Ciphers:") {
 				break
 			}
-			
+
 			if strings.Contains(trimmedLine, "Type:") {
 				profile.Type = strings.TrimSpace(strings.Split(trimmedLine, "Type:")[1])
 			} else if strings.Contains(trimmedLine, "Min TLS Version:") {
@@ -636,7 +698,7 @@ func (k *K8sClient) getAPIServerTLS() (*APIServerTLSProfile, error) {
 			}
 		}
 	}
-	
+
 	return profile, nil
 }
 
@@ -645,7 +707,7 @@ func (k *K8sClient) getKubeletTLS() (*KubeletTLSProfile, error) {
 	// Since we need to access the host filesystem, we'll try to get this from a node
 	// This assumes the scanner is running in a privileged pod with host access
 	kubeletConfigPath := "/host/etc/kubernetes/kubelet.conf"
-	
+
 	// First try to read from host mount
 	content, err := os.ReadFile(kubeletConfigPath)
 	if err != nil {
@@ -653,18 +715,18 @@ func (k *K8sClient) getKubeletTLS() (*KubeletTLSProfile, error) {
 		log.Printf("Could not read kubelet config from %s: %v, trying alternative method", kubeletConfigPath, err)
 		return k.getKubeletTLSFromNode()
 	}
-	
+
 	rawContent := string(content)
 	profile := &KubeletTLSProfile{
 		Raw: rawContent,
 	}
-	
+
 	// Parse JSON-like content for TLS settings
 	lines := strings.Split(rawContent, "\n")
-	
+
 	for _, line := range lines {
 		trimmedLine := strings.TrimSpace(line)
-		
+
 		if strings.Contains(trimmedLine, `"tlsCipherSuites"`) {
 			// Extract cipher suites array
 			if cipherStart := strings.Index(trimmedLine, "["); cipherStart != -1 {
@@ -687,7 +749,7 @@ func (k *K8sClient) getKubeletTLS() (*KubeletTLSProfile, error) {
 			}
 		}
 	}
-	
+
 	return profile, nil
 }
 
@@ -698,32 +760,32 @@ func (k *K8sClient) getKubeletTLSFromNode() (*KubeletTLSProfile, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to list nodes: %v", err)
 	}
-	
+
 	if len(nodes.Items) == 0 {
 		return nil, fmt.Errorf("no nodes found")
 	}
-	
+
 	// Try to get kubelet config from the first node
 	nodeName := nodes.Items[0].Name
-	
+
 	// Create a debug pod on the node to read the kubelet config
 	cmd := exec.Command("oc", "debug", "node/"+nodeName, "--", "cat", "/host/etc/kubernetes/kubelet.conf")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("failed to read kubelet config from node %s: %v", nodeName, err)
 	}
-	
+
 	rawOutput := string(output)
 	profile := &KubeletTLSProfile{
 		Raw: rawOutput,
 	}
-	
+
 	// Parse the kubelet config similar to the direct file read method
 	lines := strings.Split(rawOutput, "\n")
-	
+
 	for _, line := range lines {
 		trimmedLine := strings.TrimSpace(line)
-		
+
 		if strings.Contains(trimmedLine, `"tlsCipherSuites"`) {
 			// Extract cipher suites array
 			if cipherStart := strings.Index(trimmedLine, "["); cipherStart != -1 {
@@ -746,14 +808,13 @@ func (k *K8sClient) getKubeletTLSFromNode() (*KubeletTLSProfile, error) {
 			}
 		}
 	}
-	
+
 	return profile, nil
 }
 
 func main() {
 	host := flag.String("host", "127.0.0.1", "The target host or IP address to scan")
 	port := flag.String("port", "443", "The target port to scan")
-	ipListFile := flag.String("iplist", "", "Path to file containing list of IPs to scan (one per line)")
 	jsonOutput := flag.String("json", "", "Output results in JSON format to specified file (if empty, outputs to stdout in human-readable format)")
 	csvOutput := flag.String("csv", "", "Output results in CSV format to specified file")
 	csvColumns := flag.String("csv-columns", "default", "CSV columns to include: 'all', 'default', 'minimal', or comma-separated list")
@@ -771,9 +832,6 @@ func main() {
 	if *concurrentScans < 1 {
 		log.Fatal("Error: Number of concurrent scans must be at least 1")
 	}
-	if *concurrentScans > 50 {
-		log.Printf("WARNING: Using %d concurrent scans might overwhelm your system. Consider using fewer workers.", *concurrentScans)
-	}
 
 	var k8sClient *K8sClient
 	var err error
@@ -784,17 +842,18 @@ func main() {
 		if err != nil {
 			log.Fatalf("Could not create kubernetes client for --all-pods: %v", err)
 		}
-		// No need to call discoverPods here, getAllPodsInfo will do it.
-		allPodsInfo = k8sClient.getAllPodsInfo()
+
+		allPodsInfo = k8sClient.getAllPodsInfo() // get pod ip to pod name mapping
+
 		log.Printf("Found %d pods to scan from the cluster.", len(allPodsInfo))
-		
+
 		// Apply IP limit if specified
 		if *limitIPs > 0 {
 			totalIPs := 0
 			for _, pod := range allPodsInfo {
 				totalIPs += len(pod.IPs)
 			}
-			
+
 			if totalIPs > *limitIPs {
 				log.Printf("Limiting scan to %d IPs (found %d total IPs)", *limitIPs, totalIPs)
 				allPodsInfo = limitPodsToIPCount(allPodsInfo, *limitIPs)
@@ -805,41 +864,16 @@ func main() {
 				log.Printf("After limiting: %d pods with %d total IPs", len(allPodsInfo), limitedTotal)
 			}
 		}
-	} else if *ipListFile != "" {
-		ips, err := readIPsFromFile(*ipListFile)
-		if err != nil {
-			log.Fatalf("Error reading IP list file: %v", err)
-		}
-		// Lazily create k8s client if not already created for --all-pods
-		if k8sClient == nil {
-			k8sClient, err = newK8sClient()
-			if err != nil {
-				log.Printf("Could not create kubernetes client, will not be able to get process names from pods. Error: %v", err)
-			} else {
-				if err := k8sClient.discoverPods(); err != nil {
-					log.Printf("Could not discover pods, will not be able to get process names. Error: %v", err)
-					k8sClient = nil // disable if we can't list pods
-				}
-			}
-		}
-		
-		// Apply IP limit if specified
-		if *limitIPs > 0 && len(ips) > *limitIPs {
-			log.Printf("Limiting scan to %d IPs (found %d total IPs)", *limitIPs, len(ips))
-			ips = ips[:*limitIPs]
-		}
-		
-		allPodsInfo = buildPodInfoFromIPs(ips, k8sClient)
 	}
 
 	if len(allPodsInfo) > 0 {
 		var scanResults ScanResults
-		
+
 		// If CSV output is requested, we need the full results, so use regular scan
 		// If only JSON is requested, use streaming for better performance
 		if *csvOutput != "" {
 			scanResults = performClusterScan(allPodsInfo, *concurrentScans, k8sClient)
-			
+
 			// Write JSON if also requested
 			if *jsonOutput != "" {
 				// Convert ScanResults to JSON format
@@ -849,14 +883,14 @@ func main() {
 					log.Printf("JSON results written to: %s", *jsonOutput)
 				}
 			}
-			
+
 			// Write CSV output
 			if err := writeCSVOutput(scanResults, *csvOutput, *csvColumns); err != nil {
 				log.Printf("Error writing CSV output: %v", err)
 			} else {
 				log.Printf("CSV results written to: %s", *csvOutput)
 			}
-			
+
 			// Write scan errors CSV if there are any errors
 			if len(scanResults.ScanErrors) > 0 {
 				errorFilename := strings.TrimSuffix(*csvOutput, filepath.Ext(*csvOutput)) + "_errors.csv"
@@ -866,7 +900,7 @@ func main() {
 					log.Printf("Scan errors written to: %s", errorFilename)
 				}
 			}
-			
+
 			// Print to console if no output files specified
 			if *jsonOutput == "" {
 				printClusterResults(scanResults)
@@ -880,19 +914,19 @@ func main() {
 			scanResults = performClusterScan(allPodsInfo, *concurrentScans, k8sClient)
 			printClusterResults(scanResults)
 		}
-		
+
 		if k8sClient != nil {
 			mappingFile := *serviceMapping
 			if mappingFile == "" && *allPods {
 				// Auto-generate mapping file for cluster scans
 				mappingFile = "service-to-pod-ip-mapping.json"
-				
+
 				// If outputting to /tmp (like in pod), put service mapping there too
 				if *csvOutput != "" && strings.HasPrefix(*csvOutput, "/tmp/") {
 					mappingFile = "/tmp/service-to-pod-ip-mapping.json"
 				}
 			}
-			
+
 			if mappingFile != "" {
 				if err := k8sClient.generateServiceMapping(mappingFile); err != nil {
 					log.Printf("Error generating service mapping: %v", err)
@@ -901,7 +935,7 @@ func main() {
 				}
 			}
 		}
-		
+
 		return
 	}
 
@@ -925,7 +959,7 @@ func main() {
 		}
 		log.Printf("JSON results written to %s", *jsonOutput)
 	}
-	
+
 	if *csvOutput != "" {
 		// For single host scans, try to get TLS config if k8s client is available
 		var tlsConfig *TLSSecurityProfile
@@ -950,7 +984,7 @@ func main() {
 				PortResults: []PortResult{},
 			}},
 		}
-		
+
 		// Extract port information from nmap result
 		if len(nmapResult.Hosts) > 0 && len(nmapResult.Hosts[0].Ports) > 0 {
 			for _, nmapPort := range nmapResult.Hosts[0].Ports {
@@ -966,12 +1000,12 @@ func main() {
 				}
 			}
 		}
-		
+
 		if err := writeCSVOutput(singleResult, *csvOutput, *csvColumns); err != nil {
 			log.Fatalf("Error writing CSV output: %v", err)
 		}
 		log.Printf("CSV results written to %s", *csvOutput)
-		
+
 		// Write scan errors CSV if there are any errors
 		if len(singleResult.ScanErrors) > 0 {
 			errorFilename := strings.TrimSuffix(*csvOutput, filepath.Ext(*csvOutput)) + "_errors.csv"
@@ -982,7 +1016,7 @@ func main() {
 			}
 		}
 	}
-	
+
 	if *jsonOutput == "" && *csvOutput == "" {
 		printParsedResults(nmapResult)
 	}
@@ -1111,6 +1145,8 @@ func readIPsFromFile(filename string) ([]string, error) {
 func discoverOpenPorts(ip string) ([]int, error) {
 	log.Printf("Discovering open ports for %s...", ip)
 
+	// We scan all ports for this ip first to get the open ports
+	// for constructing the final results.
 	cmd := exec.Command("nmap", "-p-", "--open", "-T4", ip)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -1193,37 +1229,20 @@ func scanIPPort(ip string, port int, k8sClient *K8sClient, pod PodInfo, scanResu
 
 	// Only do process detection if we found TLS data
 	if k8sClient != nil && hasTLSData && len(pod.Containers) > 0 {
-		// Try each container until we find the process
-		processFound := false
-		for _, containerName := range pod.Containers {
-			processName, err := k8sClient.getProcessNameFromPod(pod.Name, pod.Namespace, containerName, port)
-			if err == nil && processName != "" {
-				result.ProcessName = processName
-				result.ContainerName = containerName
-				processFound = true
-				log.Printf("Found process '%s' for %s:%d in container %s", processName, ip, port, containerName)
-				break
-			} else if err != nil {
-				// Record the process detection error
-				if scanResults != nil {
-					scanError := ScanError{
-						IP:        ip,
-						Port:      port,
-						ErrorType: "PROCESS_DETECTION_FAILED",
-						ErrorMsg:  err.Error(),
-						PodName:   pod.Name,
-						Namespace: pod.Namespace,
-						Container: containerName,
-					}
-					scanResults.ScanErrors = append(scanResults.ScanErrors, scanError)
-				}
-				log.Printf("Process detection failed for %s:%d in container %s: %v", ip, port, containerName, err)
-			}
+		// Discover processes for this pod on-demand
+		k8sClient.getAndCachePodProcesses(pod)
+
+		// Look up from the now-populated cache
+		k8sClient.processCacheMutex.Lock()
+		if processName, ok := k8sClient.processNameMap[ip][port]; ok {
+			result.ProcessName = processName
+			// Since we don't know the exact container, we can leave it blank or list all
+			result.ContainerName = strings.Join(pod.Containers, ",")
+			log.Printf("Found process '%s' for %s:%d from cache", processName, ip, port)
+		} else {
+			log.Printf("Could not find process for %s:%d in cache", ip, port)
 		}
-		
-		if !processFound && len(pod.Containers) > 0 {
-			log.Printf("Could not detect process for %s:%d in any container", ip, port)
-		}
+		k8sClient.processCacheMutex.Unlock()
 	} else if !hasTLSData {
 		log.Printf("Skipping process name detection for %s:%d - no TLS data found. Nmap output: %s", ip, port, string(output))
 	}
@@ -1289,14 +1308,13 @@ func performClusterScan(allPodsInfo []PodInfo, concurrentScans int, k8sClient *K
 
 				for _, ip := range pod.IPs {
 					ipResult := scanIP(k8sClient, ip, pod, &results)
-					ipResult.OpenshiftComponent = component
+					ipResult.OpenshiftComponent = component // TODO add component to scan results
 
 					mu.Lock()
 					results.IPResults = append(results.IPResults, ipResult)
 					results.ScannedIPs++
-					completed := results.ScannedIPs
 					mu.Unlock()
-					log.Printf("WORKER %d: Completed %s (%d/%d IPs done)", workerID, ip, completed, totalIPs)
+					log.Printf("WORKER %d: Completed %s (%d/%d IPs done)", workerID, ip, results.ScannedIPs, totalIPs)
 				}
 			}
 			log.Printf("WORKER %d: FINISHED", workerID)
@@ -1326,6 +1344,7 @@ func performClusterScan(allPodsInfo []PodInfo, concurrentScans int, k8sClient *K
 	return results
 }
 
+// TODO remove
 // performClusterScanWithStreaming performs cluster scan and writes results incrementally to JSON file
 func performClusterScanWithStreaming(allPodsInfo []PodInfo, outputFile string, concurrentScans int, k8sClient *K8sClient) {
 	startTime := time.Now()
@@ -1370,6 +1389,7 @@ func performClusterScanWithStreaming(allPodsInfo []PodInfo, outputFile string, c
 				}
 
 				for _, ip := range pod.IPs {
+					// TODO just pass the pod not each ip. this is dumb. The pod itself contains all ips for that pod. wtf
 					ipResult := scanIP(k8sClient, ip, pod, nil) // Pass nil for streaming - errors won't be collected
 					ipResult.OpenshiftComponent = component
 					resultChan <- ipResult
@@ -1573,29 +1593,22 @@ func printTableWithIndent(tables []Table, indentLevel int) {
 	}
 }
 
-// PodInfo holds information about a pod and its associated IPs
-type PodInfo struct {
-	Name       string   // Pod name
-	Namespace  string   // Pod namespace
-	Image      string   // Container image
-	IPs        []string // List of IPs assigned to the pod
-	Containers []string // List of container names
-}
-
 func (k *K8sClient) getAllPodsInfo() []PodInfo {
-	// Discover both pods and services
-	if err := k.discoverPods(); err != nil {
-		log.Printf("Error discovering pods: %v", err)
-	}
-	
-	if err := k.discoverServices(); err != nil {
-		log.Printf("Error discovering services: %v", err)
-	}
-
-	pods, err := k.clientset.CoreV1().Pods("").List(context.Background(), metav1.ListOptions{})
+	pods, err := k.clientset.CoreV1().Pods("").List(context.Background(), metav1.ListOptions{}) // TODO handle error
 	if err != nil {
 		log.Printf("Error getting pods for info: %v", err)
 		return nil
+	}
+
+	// Build pod IP to Pod mapping
+	for _, pod := range pods.Items {
+		if pod.Status.PodIP != "" {
+			k.podIPMap[pod.Status.PodIP] = pod
+		}
+	}
+
+	if err := k.discoverServices(); err != nil {
+		log.Printf("Error discovering services: %v", err)
 	}
 
 	infos := make([]PodInfo, 0, len(pods.Items))
@@ -1607,7 +1620,7 @@ func (k *K8sClient) getAllPodsInfo() []PodInfo {
 		var containerNames []string
 		var image string
 		if len(pod.Spec.Containers) > 0 {
-			image = pod.Spec.Containers[0].Image // Taking the first one for now
+			image = pod.Spec.Containers[0].Image // TODO Not sure if this matters taking the first one for now
 			for _, c := range pod.Spec.Containers {
 				containerNames = append(containerNames, c.Name)
 			}
@@ -1679,18 +1692,20 @@ func scanIP(k8sClient *K8sClient, ip string, pod PodInfo, scanResults *ScanResul
 
 	ipResult := IPResult{
 		IP:          ip,
+		Pod:         &pod,
 		Status:      "scanned",
 		OpenPorts:   ports,
 		PortResults: make([]PortResult, 0, len(ports)),
 	}
 
 	// Add service information if available
-	if k8sClient != nil {
-		if services, exists := k8sClient.serviceIPMap[ip]; exists {
-			ipResult.Services = services
-			log.Printf("Found %d services for IP %s: %v", len(services), ip, getServiceNames(services))
-		}
-	}
+	// TODO fuck services for now
+	// if k8sClient != nil {
+	// 	if services, exists := k8sClient.serviceIPMap[ip]; exists {
+	// 		ipResult.Services = services
+	// 		log.Printf("Found %d services for IP %s: %v", len(services), ip, getServiceNames(services))
+	// 	}
+	// }
 
 	// Scan each open port for SSL ciphers
 	for _, port := range ports {
@@ -1726,17 +1741,17 @@ type ServiceToIPMapping struct {
 // generateServiceMapping creates a service-to-IP mapping file similar to the oc command output
 func (k *K8sClient) generateServiceMapping(filename string) error {
 	log.Printf("Generating service-to-IP mapping file: %s", filename)
-	
+
 	// Build reverse mapping from service to IPs
 	serviceToIPs := make(map[string][]string)
-	
+
 	for ip, services := range k.serviceIPMap {
 		for _, service := range services {
 			key := fmt.Sprintf("%s/%s", service.Namespace, service.Name)
 			serviceToIPs[key] = append(serviceToIPs[key], ip)
 		}
 	}
-	
+
 	// Convert to the expected output format
 	var mappings []ServiceToIPMapping
 	for serviceKey, ips := range serviceToIPs {
@@ -1747,12 +1762,12 @@ func (k *K8sClient) generateServiceMapping(filename string) error {
 			for _, ip := range ips {
 				uniqueIPs[ip] = true
 			}
-			
+
 			var sortedIPs []string
 			for ip := range uniqueIPs {
 				sortedIPs = append(sortedIPs, ip)
 			}
-			
+
 			mappings = append(mappings, ServiceToIPMapping{
 				ServiceName: parts[1],
 				Namespace:   parts[0],
@@ -1760,20 +1775,20 @@ func (k *K8sClient) generateServiceMapping(filename string) error {
 			})
 		}
 	}
-	
+
 	// Write to file
 	file, err := os.Create(filename)
 	if err != nil {
 		return fmt.Errorf("failed to create service mapping file: %v", err)
 	}
 	defer file.Close()
-	
+
 	encoder := json.NewEncoder(file)
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(mappings); err != nil {
 		return fmt.Errorf("failed to write service mapping JSON: %v", err)
 	}
-	
+
 	log.Printf("Successfully generated service mapping with %d services", len(mappings))
 	return nil
 }
@@ -1811,7 +1826,7 @@ func parseCSVColumns(spec string) []string {
 	if columns, exists := csvColumnSets[spec]; exists {
 		return columns
 	}
-	
+
 	// Custom column list
 	if strings.Contains(spec, ",") {
 		columns := strings.Split(spec, ",")
@@ -1820,7 +1835,7 @@ func parseCSVColumns(spec string) []string {
 		}
 		return columns
 	}
-	
+
 	// Default fallback
 	return csvColumnSets["default"]
 }
@@ -1828,27 +1843,27 @@ func parseCSVColumns(spec string) []string {
 // writeCSVOutput writes scan results to a CSV file with one row per IP/port combination
 func writeCSVOutput(results ScanResults, filename string, columnsSpec string) error {
 	log.Printf("Writing CSV output to: %s", filename)
-	
+
 	file, err := os.Create(filename)
 	if err != nil {
 		return fmt.Errorf("failed to create CSV file: %v", err)
 	}
 	defer file.Close()
-	
+
 	writer := csv.NewWriter(file)
 	defer writer.Flush()
-	
+
 	// Parse column selection
 	selectedColumns := parseCSVColumns(columnsSpec)
 	log.Printf("Using CSV columns: %v", selectedColumns)
-	
+
 	// Write header
 	if err := writer.Write(selectedColumns); err != nil {
 		return fmt.Errorf("failed to write CSV header: %v", err)
 	}
-	
+
 	rowCount := 0
-	
+
 	// Collect all configured cipher suites and minimum versions from TLS security profiles
 	var allConfiguredCiphers []string
 	var allConfiguredMinVersions []string
@@ -1875,41 +1890,42 @@ func writeCSVOutput(results ScanResults, filename string, columnsSpec string) er
 	// Remove duplicates from configured ciphers and min versions
 	allConfiguredCiphers = removeDuplicates(allConfiguredCiphers)
 	allConfiguredMinVersions = removeDuplicates(allConfiguredMinVersions)
-	
+
 	// Write data rows - one row per IP/port combination
 	for _, ipResult := range results.IPResults {
 		ipAddress := ipResult.IP
-		
+
 		// Process each port result
 		for _, portResult := range ipResult.PortResults {
 			// Extract pod name and namespace from services that actually listen on this specific port
-			var podNames, namespaces []string
 			targetPort := portResult.Port
-			
-			for _, service := range ipResult.Services {
-				// Check if this service listens on this specific port
-				serviceListensOnPort := false
-				for _, svcPort := range service.Ports {
-					if svcPort == targetPort {
-						serviceListensOnPort = true
-						break
-					}
-				}
-				
-				if serviceListensOnPort {
-					podNames = append(podNames, service.Name) # TODO this should be pod name, not service name
-					namespaces = append(namespaces, service.Namespace)
-				}
-			}
-			
-			podName := joinOrNA(removeDuplicates(podNames))
-			namespace := joinOrNA(removeDuplicates(namespaces))
+
+			// TODO remove this maybe this is dumb
+			// for _, service := range ipResult.Services {
+			// 	// Check if this service listens on this specific port
+			// 	serviceListensOnPort := false
+			// 	for _, svcPort := range service.Ports {
+			// 		if svcPort == targetPort {
+			// 			serviceListensOnPort = true
+			// 			break
+			// 		}
+			// 	}
+
+			// 	if serviceListensOnPort {
+			// 		log.Printf("Mapping port %d on IP %s to service %s/%s\n", targetPort, ipAddress, service.Namespace, service.Name)
+			// 		podNames = append(podNames, service.Name) // TODO this should be pod name, not service name
+			// 		namespaces = append(namespaces, service.Namespace)
+			// 	} else {
+			// 		log.Printf("Service %s/%s does not listen on port %d, skipping for this port\n", service.Namespace, service.Name, targetPort)
+			// 	}
+			// }
+
 			port := strconv.Itoa(targetPort)
-			
+
 			// Collect all detected ciphers and TLS versions for this port
 			var allDetectedCiphers []string
 			var tlsVersions []string
-			
+
 			// Extract TLS versions and ciphers from nmap script results
 			for _, host := range portResult.NmapRun.Hosts {
 				for _, nmapPort := range host.Ports {
@@ -1920,7 +1936,7 @@ func writeCSVOutput(results ScanResults, filename string, columnsSpec string) er
 								if tlsVersion != "" {
 									tlsVersions = append(tlsVersions, tlsVersion)
 								}
-								
+
 								// Find ciphers for this TLS version
 								for _, subTable := range table.Tables {
 									if subTable.Key == "ciphers" {
@@ -1938,44 +1954,47 @@ func writeCSVOutput(results ScanResults, filename string, columnsSpec string) er
 					}
 				}
 			}
-			
+
 			// Remove duplicates
 			allDetectedCiphers = removeDuplicates(allDetectedCiphers)
 			tlsVersions = removeDuplicates(tlsVersions)
-			
+
 			// Skip processing this row if no TLS data was found - improves performance
 			if len(allDetectedCiphers) == 0 && len(tlsVersions) == 0 {
 				log.Printf("Skipping CSV row for %s:%s - no TLS data detected", ipAddress, port)
 				continue
 			}
-			
+
 			// Only get process name for rows with TLS data (already filtered in scanIPPort, but double-check)
 			processName := stringOrNA(portResult.ProcessName)
-			
+
 			// Calculate intersection of configured and detected ciphers (accepted ciphers)
 			acceptedCiphers := findCipherIntersection(allConfiguredCiphers, allDetectedCiphers)
-			
+
 			// Create row data
 			rowData := map[string]string{
-				"IP":                      ipAddress,
-				"Port":                    port,
-				"Pod Name":                podName,
-				"Namespace":               namespace,
-				"Process":                 processName,
-				"TLS Ciphers":             joinOrNA(allDetectedCiphers),
-				"TLS Version":             joinOrNA(tlsVersions),
+				"IP":                        ipAddress,
+				"Port":                      port,
+				"Pod Name":                  ipResult.Pod.Name,
+				"Services":                  joinOrNA(getServiceNames(ipResult.Services)),
+				"Namespace":                 ipResult.Pod.Namespace,
+				"Process":                   processName,
+				"Component":                 ipResult.OpenshiftComponent.Component,
+				"TLS Ciphers":               joinOrNA(allDetectedCiphers),
+				"TLS Version":               joinOrNA(tlsVersions),
 				"TLS Configured MinVersion": joinOrNA(allConfiguredMinVersions),
-				"TLS Configured Ciphers":  joinOrNA(allConfiguredCiphers),
-				"TLS Accepted Ciphers":    joinOrNA(acceptedCiphers),
+				"TLS Configured Ciphers":    joinOrNA(allConfiguredCiphers),
+				"TLS Accepted Ciphers":      joinOrNA(acceptedCiphers),
 			}
-			
+
 			row := buildCSVRow(selectedColumns, rowData)
 			if err := writer.Write(row); err != nil {
 				return fmt.Errorf("failed to write CSV row: %v", err)
 			}
 			rowCount++
 		}
-		
+
+		// TODO remove this dumb shit.
 		// If no port results but IP has data, add a row with N/A for port-specific data
 		if len(ipResult.PortResults) == 0 {
 			// For IPs with no ports found, collect all service names since we don't know the specific port
@@ -1986,18 +2005,19 @@ func writeCSVOutput(results ScanResults, filename string, columnsSpec string) er
 			}
 			podName := joinOrNA(removeDuplicates(podNames))
 			namespace := joinOrNA(removeDuplicates(namespaces))
-			
+
 			rowData := map[string]string{
-				"IP":                      ipAddress,
-				"Port":                    "N/A",
-				"Pod Name":                podName,
-				"Namespace":               namespace,
-				"Process":                 "N/A",
-				"TLS Ciphers":             "N/A",
-				"TLS Version":             "N/A",
+				"IP":                        ipAddress,
+				"Port":                      "N/A",
+				"Pod Name":                  podName,
+				"Namespace":                 namespace,
+				"Component":                 ipResult.OpenshiftComponent.Component,
+				"Process":                   "N/A",
+				"TLS Ciphers":               "N/A",
+				"TLS Version":               "N/A",
 				"TLS Configured MinVersion": joinOrNA(allConfiguredMinVersions),
-				"TLS Configured Ciphers":  joinOrNA(allConfiguredCiphers),
-				"TLS Accepted Ciphers":    "N/A",
+				"TLS Configured Ciphers":    joinOrNA(allConfiguredCiphers),
+				"TLS Accepted Ciphers":      "N/A",
 			}
 			row := buildCSVRow(selectedColumns, rowData)
 			if err := writer.Write(row); err != nil {
@@ -2006,7 +2026,7 @@ func writeCSVOutput(results ScanResults, filename string, columnsSpec string) er
 			rowCount++
 		}
 	}
-	
+
 	log.Printf("Successfully wrote %d rows to CSV file with columns: %v", rowCount, selectedColumns)
 	return nil
 }
@@ -2017,24 +2037,24 @@ func writeScanErrorsCSV(results ScanResults, filename string) error {
 		log.Printf("No scan errors to write to CSV file")
 		return nil
 	}
-	
+
 	log.Printf("Writing scan errors to: %s", filename)
-	
+
 	file, err := os.Create(filename)
 	if err != nil {
 		return fmt.Errorf("failed to create scan errors CSV file: %v", err)
 	}
 	defer file.Close()
-	
+
 	writer := csv.NewWriter(file)
 	defer writer.Flush()
-	
+
 	// Write header
 	header := []string{"IP", "Port", "Error Type", "Error Message", "Pod Name", "Namespace", "Container"}
 	if err := writer.Write(header); err != nil {
 		return fmt.Errorf("failed to write scan errors CSV header: %v", err)
 	}
-	
+
 	// Write error rows
 	for _, scanError := range results.ScanErrors {
 		row := []string{
@@ -2046,12 +2066,12 @@ func writeScanErrorsCSV(results ScanResults, filename string) error {
 			stringOrNA(scanError.Namespace),
 			stringOrNA(scanError.Container),
 		}
-		
+
 		if err := writer.Write(row); err != nil {
 			return fmt.Errorf("failed to write scan error row: %v", err)
 		}
 	}
-	
+
 	log.Printf("Successfully wrote %d scan error rows to CSV file", len(results.ScanErrors))
 	return nil
 }
@@ -2102,20 +2122,20 @@ func findCipherIntersection(configured, detected []string) []string {
 	if len(configured) == 0 || len(detected) == 0 {
 		return []string{}
 	}
-	
+
 	// Create a map for faster lookup
 	configuredMap := make(map[string]bool)
 	for _, cipher := range configured {
 		configuredMap[cipher] = true
 	}
-	
+
 	var intersection []string
 	for _, cipher := range detected {
 		if configuredMap[cipher] {
 			intersection = append(intersection, cipher)
 		}
 	}
-	
+
 	return removeDuplicates(intersection)
 }
 
@@ -2124,28 +2144,28 @@ func limitPodsToIPCount(allPodsInfo []PodInfo, maxIPs int) []PodInfo {
 	if maxIPs <= 0 {
 		return allPodsInfo
 	}
-	
+
 	var limitedPods []PodInfo
 	currentIPCount := 0
-	
+
 	for _, pod := range allPodsInfo {
 		if currentIPCount >= maxIPs {
 			break
 		}
-		
+
 		// If this pod would exceed the limit, include only some of its IPs
-		if currentIPCount + len(pod.IPs) > maxIPs {
+		if currentIPCount+len(pod.IPs) > maxIPs {
 			remainingIPs := maxIPs - currentIPCount
 			limitedPod := pod
 			limitedPod.IPs = pod.IPs[:remainingIPs]
 			limitedPods = append(limitedPods, limitedPod)
 			break
 		}
-		
+
 		// Include the entire pod
 		limitedPods = append(limitedPods, pod)
 		currentIPCount += len(pod.IPs)
 	}
-	
+
 	return limitedPods
 }

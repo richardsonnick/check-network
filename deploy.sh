@@ -75,6 +75,10 @@ echo "--> Creating new build configuration..."
 oc new-build --name="$APP_NAME" --strategy=docker --binary
 check_error "oc new-build"
 
+echo "--> Setting resource limits for the build..."
+oc patch bc/"$APP_NAME" -p '{"spec":{"resources":{"limits":{"memory":"8Gi","ephemeral-storage":"8Gi"},"requests":{"memory":"4Gi","ephemeral-storage":"4Gi"}}}}'
+check_error "oc patch resources"
+
 echo "--> Starting the build (this may take a few minutes)..."
 oc start-build "$APP_NAME" --from-dir=. --follow
 check_error "oc start-build"
@@ -202,8 +206,7 @@ fi
 
 echo "--> Executing the scan in the background inside the pod..."
 # The command is run in the background of the script, but synchronously inside the pod
-oc exec -n "$CURRENT_PROJECT" "$POD_NAME" -- /usr/local/bin/check-network -all-pods -csv /tmp/security-scan-$(date +%Y%m%d).csv -csv-columns all -json /tmp/security-scan-$(date +%Y%m%d).json -j 4 -limit-ips 5
-#oc exec -n "$CURRENT_PROJECT" "$POD_NAME" -- /usr/local/bin/check-network -csv /tmp/security-scan-$(date +%Y%m%d).csv -csv-columns all -json /tmp/security-scan-$(date +%Y%m%d).json -j 4 -host 10.128.0.16 -port 17698
+oc exec -n "$CURRENT_PROJECT" "$POD_NAME" -- /usr/local/bin/check-network -all-pods -csv /tmp/security-scan-$(date +%Y%m%d).csv -csv-columns all -json /tmp/security-scan-$(date +%Y%m%d).json -j 12 -limit-ips 5
 check_error "Executing scan"
 
 print_header "Step 3: Retrieving and Displaying Results"
