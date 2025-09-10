@@ -159,7 +159,7 @@ type APIServerTLSProfile struct {
 
 type KubeletTLSProfile struct {
 	TLSCipherSuites []string `json:"tls_cipher_suites,omitempty"`
-	TLSMinVersion   string   `json:"tls_min_version,omitempty"`
+	MinTLSVersion   string   `json:"tls_min_version,omitempty"`
 	Raw             string   `json:"raw,omitempty"`
 }
 
