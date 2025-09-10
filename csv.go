@@ -12,9 +12,9 @@ import (
 var csvColumns = []string{
 	"IP", "Port", "Pod Name", "Namespace", "Component Name", "Component Maintainer",
 	"Process", "TLS Ciphers", "TLS Version",
-	"Ingress Configured Profile", "Ingress Configured MinVersion", "Ingress MinVersion Compliance", "Ingress Configured Ciphers",
-	"API Configured Profile", "API Configured MinVersion", "API MinVersion Compliance", "API Configured Ciphers",
-	"Kubelet Configured MinVersion", "Kubelet MinVersion Compliance", "Kubelet Configured Ciphers",
+	"Ingress Configured Profile", "Ingress Configured MinVersion", "Ingress MinVersion Compliance", "Ingress Configured Ciphers", "Ingress Cipher Compliance",
+	"API Configured Profile", "API Configured MinVersion", "API MinVersion Compliance", "API Configured Ciphers", "API Cipher Compliance",
+	"Kubelet Configured MinVersion", "Kubelet MinVersion Compliance", "Kubelet Configured Ciphers", "Kubelet Cipher Compliance",
 }
 
 // writeCSVOutput writes scan results to a CSV file with one row per IP/port combination
@@ -114,13 +114,16 @@ func writeCSVOutput(results ScanResults, filename string) error {
 				"Ingress Configured MinVersion": ingressMinVersion,
 				"Ingress MinVersion Compliance": strconv.FormatBool(portResult.IngressTLSConfigCompliance.Version),
 				"Ingress Configured Ciphers":    ingressCiphers,
+				"Ingress Cipher Compliance":     strconv.FormatBool(portResult.IngressTLSConfigCompliance.Ciphers),
 				"API Configured Profile":        apiProfile,
 				"API Configured MinVersion":     apiMinVersion,
 				"API MinVersion Compliance":     strconv.FormatBool(portResult.APIServerTLSConfigCompliance.Version),
 				"API Configured Ciphers":        apiCiphers,
+				"API Cipher Compliance":         strconv.FormatBool(portResult.APIServerTLSConfigCompliance.Ciphers),
 				"Kubelet Configured MinVersion": kubeletMinVersion,
 				"Kubelet MinVersion Compliance": strconv.FormatBool(portResult.KubeletTLSConfigCompliance.Version),
 				"Kubelet Configured Ciphers":    kubeletCiphers,
+				"Kubelet Cipher Compliance":     strconv.FormatBool(portResult.KubeletTLSConfigCompliance.Ciphers),
 			}
 
 			row := buildCSVRow(csvColumns, rowData)
