@@ -493,7 +493,7 @@ func (k *K8sClient) getKubeletTLS() (*KubeletTLSProfile, error) {
 			// Extract minimum TLS version
 			if colonIndex := strings.Index(trimmedLine, ":"); colonIndex != -1 {
 				versionPart := strings.TrimSpace(trimmedLine[colonIndex+1:])
-				profile.TLSMinVersion = strings.Trim(versionPart, `",`)
+				profile.MinTLSVersion = strings.Trim(versionPart, `",`)
 			}
 		}
 	}
@@ -552,7 +552,7 @@ func (k *K8sClient) getKubeletTLSFromNode() (*KubeletTLSProfile, error) {
 			// Extract minimum TLS version
 			if colonIndex := strings.Index(trimmedLine, ":"); colonIndex != -1 {
 				versionPart := strings.TrimSpace(trimmedLine[colonIndex+1:])
-				profile.TLSMinVersion = strings.Trim(versionPart, `",`)
+				profile.MinTLSVersion = strings.Trim(versionPart, `",`)
 			}
 		}
 	}

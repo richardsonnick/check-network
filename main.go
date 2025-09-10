@@ -228,24 +228,48 @@ func discoverOpenPorts(ip string) ([]int, error) {
 	return ports, nil
 }
 
+func getMinVersionValue(versions []string) int {
+	if len(versions) == 0 {
+		return 0
+	}
+	minVersion := tlsVersionValueMap[versions[0]]
+	for _, v := range versions[1:] {
+		verVal := tlsVersionValueMap[v]
+		if verVal < minVersion {
+			minVersion = verVal
+		}
+	}
+	return minVersion
+}
+
 func checkCompliance(portResult *PortResult, tlsProfile *TLSSecurityProfile) {
-	// Check ingress config compliance
-	// if ingress := tlsProfile.IngressController; tlsProfile.IngressController != nil {
-	// 	if ingress.MinTLSVersion != "" {
-	// 		portResultMinVersion = getMinVersion(portResult.)
-	// 		portResults.IngressTLSConfigCompliance.Version =
-	// 	}
-	// }
+	// TODO check ciphers as well
+	portResultMinVersion := 0
+	if portResult.TlsVersions != nil {
+		portResultMinVersion = getMinVersionValue(portResult.TlsVersions)
+	}
 
-	// // Check api config compliance
-	// if tlsProfile.APIServer != nil {
+	if ingress := tlsProfile.IngressController; tlsProfile.IngressController != nil {
+		if ingress.MinTLSVersion != "" {
+			ingressMinVersion := tlsVersionValueMap[ingress.MinTLSVersion]
+			portResult.IngressTLSConfigCompliance.Version = (portResultMinVersion >= ingressMinVersion)
+		}
+	}
 
-	// }
+	if api := tlsProfile.APIServer; tlsProfile.APIServer != nil {
+		if api.MinTLSVersion != "" {
+			apiMinVersion := tlsVersionValueMap[api.MinTLSVersion]
+			portResult.APIServerTLSConfigCompliance.Version = (portResultMinVersion >= apiMinVersion)
+		}
+	}
 
-	// // Check kubelet config compliance
-	// if tlsProfile.KubeletConfig != nil {
+	if kube := tlsProfile.KubeletConfig; tlsProfile.KubeletConfig != nil {
+		if kube.MinTLSVersion != "" {
+			kubMinVersion := tlsVersionValueMap[kube.MinTLSVersion]
+			portResult.KubeletTLSConfigCompliance.Version = (portResultMinVersion >= kubMinVersion)
+		}
 
-	// }
+	}
 }
 
 func extractTLSInfo(nmapRun NmapRun) (versions []string, ciphers []string, cipherStrength map[string]string) {
@@ -439,8 +463,8 @@ func performClusterScan(allPodsInfo []PodInfo, concurrentScans int, k8sClient *K
 				}
 
 				for _, ip := range pod.IPs {
-					ipResult := scanIP(k8sClient, ip, pod, &results)
-					ipResult.OpenshiftComponent = component // TODO add component to scan results
+					ipResult := scanIP(k8sClient, ip, pod, tlsConfig)
+					ipResult.OpenshiftComponent = component
 
 					mu.Lock()
 					results.IPResults = append(results.IPResults, ipResult)
@@ -476,7 +500,7 @@ func performClusterScan(allPodsInfo []PodInfo, concurrentScans int, k8sClient *K
 	return results
 }
 
-func scanIP(k8sClient *K8sClient, ip string, pod PodInfo, scanResults *ScanResults) IPResult {
+func scanIP(k8sClient *K8sClient, ip string, pod PodInfo, tlsSecurityProfile *TLSSecurityProfile) IPResult {
 	ports, err := discoverOpenPorts(ip)
 	if err != nil {
 		return IPResult{
@@ -496,13 +520,14 @@ func scanIP(k8sClient *K8sClient, ip string, pod PodInfo, scanResults *ScanResul
 
 	// Scan each open port for SSL ciphers
 	for _, port := range ports {
-		portResult, err := scanIPPort(ip, port, k8sClient, pod, scanResults)
+		portResult, err := scanIPPort(ip, port, k8sClient, pod)
 		if err != nil {
 			portResult = PortResult{
 				Port:  port,
 				Error: err.Error(),
 			}
 		}
+		checkCompliance(&portResult, tlsSecurityProfile)
 		ipResult.PortResults = append(ipResult.PortResults, portResult)
 	}
 

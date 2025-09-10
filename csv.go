@@ -62,7 +62,7 @@ func writeCSVOutput(results ScanResults, filename string) error {
 			apiCiphers = "N/A"
 		}
 		if results.TLSSecurityConfig.KubeletConfig != nil {
-			kubeletMinVersion = stringOrNA(results.TLSSecurityConfig.KubeletConfig.TLSMinVersion)
+			kubeletMinVersion = stringOrNA(results.TLSSecurityConfig.KubeletConfig.MinTLSVersion)
 			kubeletCiphers = joinOrNA(removeDuplicates(results.TLSSecurityConfig.KubeletConfig.TLSCipherSuites))
 		} else {
 			kubeletMinVersion = "N/A"
