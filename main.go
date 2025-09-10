@@ -243,7 +243,6 @@ func getMinVersionValue(versions []string) int {
 }
 
 func checkCompliance(portResult *PortResult, tlsProfile *TLSSecurityProfile) {
-	// TODO check ciphers as well
 	portResultMinVersion := 0
 	if portResult.TlsVersions != nil {
 		portResultMinVersion = getMinVersionValue(portResult.TlsVersions)
@@ -259,6 +258,7 @@ func checkCompliance(portResult *PortResult, tlsProfile *TLSSecurityProfile) {
 			ingressMinVersion := tlsVersionValueMap[ingress.MinTLSVersion]
 			portResult.IngressTLSConfigCompliance.Version = (portResultMinVersion >= ingressMinVersion)
 		}
+		portResult.IngressTLSConfigCompliance.Ciphers = checkCipherCompliance(portResult.TlsCiphers, ingress.Ciphers)
 	}
 
 	if api := tlsProfile.APIServer; tlsProfile.APIServer != nil {
@@ -266,6 +266,7 @@ func checkCompliance(portResult *PortResult, tlsProfile *TLSSecurityProfile) {
 			apiMinVersion := tlsVersionValueMap[api.MinTLSVersion]
 			portResult.APIServerTLSConfigCompliance.Version = (portResultMinVersion >= apiMinVersion)
 		}
+		portResult.APIServerTLSConfigCompliance.Ciphers = checkCipherCompliance(portResult.TlsCiphers, api.Ciphers)
 	}
 
 	if kube := tlsProfile.KubeletConfig; tlsProfile.KubeletConfig != nil {
@@ -273,8 +274,34 @@ func checkCompliance(portResult *PortResult, tlsProfile *TLSSecurityProfile) {
 			kubMinVersion := tlsVersionValueMap[kube.MinTLSVersion]
 			portResult.KubeletTLSConfigCompliance.Version = (portResultMinVersion >= kubMinVersion)
 		}
-
+		portResult.KubeletTLSConfigCompliance.Ciphers = checkCipherCompliance(portResult.TlsCiphers, kube.TLSCipherSuites)
 	}
+
+}
+
+func checkCipherCompliance(gotCiphers []string, expectedCiphers []string) bool {
+	if len(gotCiphers) != len(expectedCiphers) {
+		return false
+	}
+
+	for _, cipher := range gotCiphers {
+		convertedCipher := nmapCipherToStandardCipherMap[cipher]
+		if !stringInSlice(convertedCipher, expectedCiphers) {
+			return false
+		}
+	}
+	return true
+}
+
+// TODO move to helpers
+// stringInSlice returns true if the string s is present in slice list.
+func stringInSlice(s string, list []string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
 }
 
 func extractTLSInfo(nmapRun NmapRun) (versions []string, ciphers []string, cipherStrength map[string]string) {
