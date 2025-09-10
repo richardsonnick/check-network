@@ -1627,7 +1627,7 @@ type CSVColumnInfo struct {
 var csvColumnSets = map[string][]string{
 	"minimal": {"IP", "Port", "TLS Version", "TLS Ciphers"},
 	"default": {"IP", "Port", "Pod Name", "Namespace", "Component Name", "Component Maintainer", "Process", "TLS Ciphers", "TLS Version", "TLS Configured MinVersion", "TLS Configured Ciphers"},
-	"all":     {"IP", "Port", "Pod Name", "Namespace", "Component Name", "Component Maintainer", "Process", "TLS Ciphers", "TLS Version", "TLS Configured MinVersion", "TLS Configured Ciphers", "TLS Accepted Ciphers"},
+	"all":     {"IP", "Port", "Pod Name", "Namespace", "Component Name", "Component Maintainer", "Process", "TLS Ciphers", "TLS Version", "TLS Configured MinVersion", "TLS Configured Ciphers"},
 }
 
 // parseCSVColumns parses the CSV columns specification
@@ -1757,9 +1757,6 @@ func writeCSVOutput(results ScanResults, filename string, columnsSpec string) er
 			// Only get process name for rows with TLS data (already filtered in scanIPPort, but double-check)
 			processName := stringOrNA(portResult.ProcessName)
 
-			// Calculate intersection of configured and detected ciphers (accepted ciphers)
-			acceptedCiphers := findCipherIntersection(allConfiguredCiphers, allDetectedCiphers)
-
 			// Create row data
 			rowData := map[string]string{
 				"IP":                        ipAddress,
@@ -1773,7 +1770,6 @@ func writeCSVOutput(results ScanResults, filename string, columnsSpec string) er
 				"TLS Version":               joinOrNA(tlsVersions),
 				"TLS Configured MinVersion": joinOrNA(allConfiguredMinVersions),
 				"TLS Configured Ciphers":    joinOrNA(allConfiguredCiphers),
-				"TLS Accepted Ciphers":      joinOrNA(acceptedCiphers),
 			}
 
 			row := buildCSVRow(selectedColumns, rowData)
@@ -1873,28 +1869,6 @@ func removeDuplicates(slice []string) []string {
 		}
 	}
 	return result
-}
-
-// findCipherIntersection finds ciphers that appear in both configured and detected lists
-func findCipherIntersection(configured, detected []string) []string {
-	if len(configured) == 0 || len(detected) == 0 {
-		return []string{}
-	}
-
-	// Create a map for faster lookup
-	configuredMap := make(map[string]bool)
-	for _, cipher := range configured {
-		configuredMap[cipher] = true
-	}
-
-	var intersection []string
-	for _, cipher := range detected {
-		if configuredMap[cipher] {
-			intersection = append(intersection, cipher)
-		}
-	}
-
-	return removeDuplicates(intersection)
 }
 
 // limitPodsToIPCount limits the pod list to contain at most maxIPs total IP addresses
