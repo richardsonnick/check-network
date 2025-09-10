@@ -387,7 +387,7 @@ func (k *K8sClient) getIngressControllerTLS() (*IngressTLSProfile, error) {
 	// "If unset, the default is based on the apiservers.config.openshift.io/cluster resource."
 	// TODO make this just use the API Server TLS profile if not set here?
 	if ingress.Spec.TLSSecurityProfile == nil {
-		profile.Type = "API Config Server Default"
+		profile.Type = "API Config Server"
 		return profile, nil
 	}
 
