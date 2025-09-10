@@ -80,12 +80,12 @@ type Elem struct {
 }
 
 type ScanResults struct {
-	Timestamp         string             `json:"timestamp"`
-	TotalIPs          int                `json:"total_ips"`
-	ScannedIPs        int                `json:"scanned_ips"`
-	IPResults         []IPResult         `json:"ip_results"`
+	Timestamp         string              `json:"timestamp"`
+	TotalIPs          int                 `json:"total_ips"`
+	ScannedIPs        int                 `json:"scanned_ips"`
+	IPResults         []IPResult          `json:"ip_results"`
 	TLSSecurityConfig *TLSSecurityProfile `json:"tls_security_config,omitempty"`
-	ScanErrors        []ScanError        `json:"scan_errors,omitempty"`
+	ScanErrors        []ScanError         `json:"scan_errors,omitempty"`
 }
 
 // ScanError represents a scanning error for a specific IP:port
@@ -99,13 +99,13 @@ type ScanError struct {
 	Container string `json:"container,omitempty"`
 }
 
-
 type IPResult struct {
 	IP                 string              `json:"ip"`
 	Status             string              `json:"status"`
 	OpenPorts          []int               `json:"open_ports"`
 	PortResults        []PortResult        `json:"port_results"`
 	OpenshiftComponent *OpenshiftComponent `json:"openshift_component,omitempty"`
+	Pod                *PodInfo            `json:"pod,omitempty"`
 	Services           []ServiceInfo       `json:"services,omitempty"`
 	Error              string              `json:"error,omitempty"`
 }
@@ -115,6 +115,14 @@ type ServiceInfo struct {
 	Namespace string `json:"namespace"`
 	Type      string `json:"type"`
 	Ports     []int  `json:"ports,omitempty"`
+}
+
+type PodInfo struct {
+	Name       string   // Pod name
+	Namespace  string   // Pod namespace
+	Image      string   // Container image
+	IPs        []string // List of IPs assigned to the pod
+	Containers []string // List of container names
 }
 
 type PortResult struct {
@@ -137,23 +145,23 @@ type OpenshiftComponent struct {
 
 // TLSSecurityProfile represents TLS configuration from OpenShift components
 type TLSSecurityProfile struct {
-	IngressController *IngressTLSProfile `json:"ingress_controller,omitempty"`
+	IngressController *IngressTLSProfile   `json:"ingress_controller,omitempty"`
 	APIServer         *APIServerTLSProfile `json:"api_server,omitempty"`
-	KubeletConfig     *KubeletTLSProfile `json:"kubelet_config,omitempty"`
+	KubeletConfig     *KubeletTLSProfile   `json:"kubelet_config,omitempty"`
 }
 
 type IngressTLSProfile struct {
-	Type         string   `json:"type,omitempty"`
+	Type          string   `json:"type,omitempty"`
 	MinTLSVersion string   `json:"min_tls_version,omitempty"`
-	Ciphers      []string `json:"ciphers,omitempty"`
-	Raw          string   `json:"raw,omitempty"`
+	Ciphers       []string `json:"ciphers,omitempty"`
+	Raw           string   `json:"raw,omitempty"`
 }
 
 type APIServerTLSProfile struct {
-	Type         string   `json:"type,omitempty"`
+	Type          string   `json:"type,omitempty"`
 	MinTLSVersion string   `json:"min_tls_version,omitempty"`
-	Ciphers      []string `json:"ciphers,omitempty"`
-	Raw          string   `json:"raw,omitempty"`
+	Ciphers       []string `json:"ciphers,omitempty"`
+	Raw           string   `json:"raw,omitempty"`
 }
 
 type KubeletTLSProfile struct {
@@ -163,11 +171,14 @@ type KubeletTLSProfile struct {
 }
 
 type K8sClient struct {
-	clientset    *kubernetes.Clientset
-	restCfg      *rest.Config
-	podIPMap     map[string]v1.Pod
-	serviceIPMap map[string][]ServiceInfo  // IP -> Services mapping
-	namespace    string
+	clientset                 *kubernetes.Clientset
+	restCfg                   *rest.Config
+	podIPMap                  map[string]v1.Pod         // IP -> PodName
+	serviceIPMap              map[string][]ServiceInfo  // IP -> Services mapping
+	processNameMap            map[string]map[int]string // IP -> Port -> Process Name
+	processDiscoveryAttempted map[string]bool           // Pod Name -> bool
+	processCacheMutex         sync.Mutex
+	namespace                 string
 }
 
 func newK8sClient() (*K8sClient, error) {
@@ -192,11 +203,13 @@ func newK8sClient() (*K8sClient, error) {
 	}
 
 	return &K8sClient{
-		clientset:    clientset,
-		restCfg:      config,
-		podIPMap:     make(map[string]v1.Pod),
-		serviceIPMap: make(map[string][]ServiceInfo),
-		namespace:    namespace,
+		clientset:                 clientset,
+		restCfg:                   config,
+		podIPMap:                  make(map[string]v1.Pod),
+		serviceIPMap:              make(map[string][]ServiceInfo),
+		processNameMap:            make(map[string]map[int]string),
+		processDiscoveryAttempted: make(map[string]bool),
+		namespace:                 namespace,
 	}, nil
 }
 
