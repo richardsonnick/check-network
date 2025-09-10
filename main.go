@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"encoding/xml"
 	"flag"
@@ -15,9 +14,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	v1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 func main() {
@@ -423,53 +419,6 @@ func performClusterScan(allPodsInfo []PodInfo, concurrentScans int, k8sClient *K
 	fmt.Printf("========================================\n")
 
 	return results
-}
-
-func (k *K8sClient) getAllPodsInfo() []PodInfo {
-	pods, err := k.clientset.CoreV1().Pods("").List(context.Background(), metav1.ListOptions{}) // TODO handle error
-	if err != nil {
-		log.Printf("Error getting pods for info: %v", err)
-		return nil
-	}
-
-	// Build pod IP to Pod mapping
-	for _, pod := range pods.Items {
-		if pod.Status.PodIP != "" {
-			k.podIPMap[pod.Status.PodIP] = pod
-		}
-	}
-
-	infos := make([]PodInfo, 0, len(pods.Items))
-	for _, pod := range pods.Items {
-		if pod.Status.PodIP == "" || pod.Status.Phase != v1.PodRunning {
-			continue
-		}
-
-		var containerNames []string
-		var image string
-		if len(pod.Spec.Containers) > 0 {
-			image = pod.Spec.Containers[0].Image // TODO Not sure if this matters taking the first one for now
-			for _, c := range pod.Spec.Containers {
-				containerNames = append(containerNames, c.Name)
-			}
-		}
-
-		var ips []string
-		for _, podIP := range pod.Status.PodIPs {
-			ips = append(ips, podIP.IP)
-		}
-
-		if len(ips) > 0 {
-			infos = append(infos, PodInfo{
-				Name:       pod.Name,
-				Namespace:  pod.Namespace,
-				Image:      image,
-				IPs:        ips,
-				Containers: containerNames,
-			})
-		}
-	}
-	return infos
 }
 
 func scanIP(k8sClient *K8sClient, ip string, pod PodInfo, scanResults *ScanResults) IPResult {
