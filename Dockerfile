@@ -14,7 +14,7 @@ FROM registry.access.redhat.com/ubi8/ubi-minimal:latest
 
 USER root
 
-RUN microdnf install -y nmap tar && microdnf clean all
+RUN microdnf install -y nmap tar lsof && microdnf clean all
 
 COPY --from=builder /app/check-network /usr/local/bin/check-network
 
