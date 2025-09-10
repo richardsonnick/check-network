@@ -1,12 +1,10 @@
 package main
 
 import (
-	"encoding/json"
 	"encoding/xml"
 	"flag"
 	"fmt"
 	"log"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -200,23 +198,6 @@ func main() {
 func isNmapInstalled() bool {
 	_, err := exec.LookPath("nmap")
 	return err == nil
-}
-
-func writeJSONOutput(data interface{}, filename string) error {
-	file, err := os.Create(filename)
-	if err != nil {
-		return fmt.Errorf("failed to create output file: %v", err)
-	}
-	defer file.Close()
-
-	encoder := json.NewEncoder(file)
-	encoder.SetIndent("", "  ")
-	if err := encoder.Encode(data); err != nil {
-		return fmt.Errorf("failed to encode JSON: %v", err)
-	}
-
-	log.Printf("JSON output written to: %s", filename)
-	return nil
 }
 
 func discoverOpenPorts(ip string) ([]int, error) {

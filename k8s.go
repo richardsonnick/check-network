@@ -376,6 +376,7 @@ func (k *K8sClient) getTLSSecurityProfile() (*TLSSecurityProfile, error) {
 
 // getIngressControllerTLS gets TLS configuration from Ingress Controller
 func (k *K8sClient) getIngressControllerTLS() (*IngressTLSProfile, error) {
+	// TODO this namespace may be wrong for ingress
 	ingress, err := k.operatorClient.OperatorV1().IngressControllers("openshift-ingress-operator").Get(context.Background(), "default", metav1.GetOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get IngressController custom resource: %v", err)
