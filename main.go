@@ -29,6 +29,10 @@ import (
 	"k8s.io/kubectl/pkg/scheme"
 )
 
+var csvColumns = []string{
+	"IP", "Port", "Pod Name", "Namespace", "Component Name", "Component Maintainer", "Process", "TLS Ciphers", "TLS Version", "TLS Configured MinVersion", "TLS Configured Ciphers",
+}
+
 type NmapRun struct {
 	XMLName xml.Name `xml:"nmaprun" json:"-"`
 	Hosts   []Host   `xml:"host" json:"hosts"`
@@ -737,7 +741,6 @@ func main() {
 	port := flag.String("port", "443", "The target port to scan")
 	jsonOutput := flag.String("json", "", "Output results in JSON format to specified file (if empty, outputs to stdout in human-readable format)")
 	csvOutput := flag.String("csv", "", "Output results in CSV format to specified file")
-	csvColumns := flag.String("csv-columns", "default", "CSV columns to include: 'all', 'default', 'minimal', or comma-separated list")
 	concurrentScans := flag.Int("j", 1, "Number of concurrent scans to run in parallel (speeds up large IP lists significantly!)")
 	allPods := flag.Bool("all-pods", false, "Scan all pods in the current namespace (overrides --iplist and --host)")
 	limitIPs := flag.Int("limit-ips", 0, "Limit the number of IPs to scan for testing purposes (0 = no limit)")
@@ -804,7 +807,7 @@ func main() {
 			}
 
 			// Write CSV output
-			if err := writeCSVOutput(scanResults, *csvOutput, *csvColumns); err != nil {
+			if err := writeCSVOutput(scanResults, *csvOutput); err != nil {
 				log.Printf("Error writing CSV output: %v", err)
 			} else {
 				log.Printf("CSV results written to: %s", *csvOutput)
@@ -899,7 +902,7 @@ func main() {
 			}
 		}
 
-		if err := writeCSVOutput(singleResult, *csvOutput, *csvColumns); err != nil {
+		if err := writeCSVOutput(singleResult, *csvOutput); err != nil {
 			log.Fatalf("Error writing CSV output: %v", err)
 		}
 		log.Printf("CSV results written to %s", *csvOutput)
@@ -1616,42 +1619,13 @@ func getServiceNames(services []ServiceInfo) []string {
 	return names
 }
 
-// CSVColumnInfo defines metadata for CSV columns
-type CSVColumnInfo struct {
-	Name        string
-	Description string
-}
-
-// Predefined column sets
-// TODO remove these sets. just use one set.
-var csvColumnSets = map[string][]string{
-	"minimal": {"IP", "Port", "TLS Version", "TLS Ciphers"},
-	"default": {"IP", "Port", "Pod Name", "Namespace", "Component Name", "Component Maintainer", "Process", "TLS Ciphers", "TLS Version", "TLS Configured MinVersion", "TLS Configured Ciphers"},
-	"all":     {"IP", "Port", "Pod Name", "Namespace", "Component Name", "Component Maintainer", "Process", "TLS Ciphers", "TLS Version", "TLS Configured MinVersion", "TLS Configured Ciphers"},
-}
-
 // parseCSVColumns parses the CSV columns specification
 func parseCSVColumns(spec string) []string {
-	// Check if it's a predefined column set
-	if columns, exists := csvColumnSets[spec]; exists {
-		return columns
-	}
-
-	// Custom column list
-	if strings.Contains(spec, ",") {
-		columns := strings.Split(spec, ",")
-		for i, col := range columns {
-			columns[i] = strings.TrimSpace(col)
-		}
-		return columns
-	}
-
-	// Default fallback
-	return csvColumnSets["default"]
+	return csvColumns
 }
 
 // writeCSVOutput writes scan results to a CSV file with one row per IP/port combination
-func writeCSVOutput(results ScanResults, filename string, columnsSpec string) error {
+func writeCSVOutput(results ScanResults, filename string) error {
 	log.Printf("Writing CSV output to: %s", filename)
 
 	file, err := os.Create(filename)
@@ -1663,12 +1637,8 @@ func writeCSVOutput(results ScanResults, filename string, columnsSpec string) er
 	writer := csv.NewWriter(file)
 	defer writer.Flush()
 
-	// Parse column selection
-	selectedColumns := parseCSVColumns(columnsSpec)
-	log.Printf("Using CSV columns: %v", selectedColumns)
-
 	// Write header
-	if err := writer.Write(selectedColumns); err != nil {
+	if err := writer.Write(csvColumns); err != nil {
 		return fmt.Errorf("failed to write CSV header: %v", err)
 	}
 
@@ -1772,7 +1742,7 @@ func writeCSVOutput(results ScanResults, filename string, columnsSpec string) er
 				"TLS Configured Ciphers":    joinOrNA(allConfiguredCiphers),
 			}
 
-			row := buildCSVRow(selectedColumns, rowData)
+			row := buildCSVRow(csvColumns, rowData)
 			if err := writer.Write(row); err != nil {
 				return fmt.Errorf("failed to write CSV row: %v", err)
 			}
@@ -1781,7 +1751,6 @@ func writeCSVOutput(results ScanResults, filename string, columnsSpec string) er
 
 	}
 
-	log.Printf("Successfully wrote %d rows to CSV file with columns: %v", rowCount, selectedColumns)
 	return nil
 }
 
