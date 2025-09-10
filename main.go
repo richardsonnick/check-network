@@ -213,21 +213,21 @@ func newK8sClient() (*K8sClient, error) {
 	}, nil
 }
 
-func (k *K8sClient) discoverPods() error {
-	log.Printf("Discovering pods in all namespaces")
-	pods, err := k.clientset.CoreV1().Pods("").List(context.Background(), metav1.ListOptions{})
-	if err != nil {
-		return err
-	}
+// func (k *K8sClient) discoverPods() error {
+// 	log.Printf("Discovering pods in all namespaces")
+// 	pods, err := k.clientset.CoreV1().Pods("").List(context.Background(), metav1.ListOptions{})
+// 	if err != nil {
+// 		return err
+// 	}
 
-	for _, pod := range pods.Items {
-		if pod.Status.PodIP != "" {
-			k.podIPMap[pod.Status.PodIP] = pod
-		}
-	}
-	log.Printf("Discovered %d pods with IPs across all namespaces", len(k.podIPMap))
-	return nil
-}
+// 	for _, pod := range pods.Items {
+// 		if pod.Status.PodIP != "" {
+// 			k.podIPMap[pod.Status.PodIP] = pod
+// 		}
+// 	}
+// 	log.Printf("Discovered %d pods with IPs across all namespaces", len(k.podIPMap))
+// 	return nil
+// }
 
 func (k *K8sClient) discoverServices() error {
 	log.Printf("Discovering services and endpoints in all namespaces")
