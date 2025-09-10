@@ -8,3 +8,4 @@ api-config-results/
 results.json
 small_test.txt
 *.json
+show_csv.sh
