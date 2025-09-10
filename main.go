@@ -280,37 +280,30 @@ func checkCompliance(portResult *PortResult, tlsProfile *TLSSecurityProfile) {
 }
 
 func checkCipherCompliance(gotCiphers []string, expectedCiphers []string) bool {
-	// Create a set of expected ciphers for efficient lookup.
 	expectedSet := make(map[string]struct{}, len(expectedCiphers))
 	for _, c := range expectedCiphers {
 		expectedSet[c] = struct{}{}
 	}
 
-	// Create a set of the ciphers we actually found, after converting them to the standard names.
 	gotSet := make(map[string]struct{}, len(gotCiphers))
 	for _, cipher := range gotCiphers {
-		// Convert from nmap name to standard name.
 		if converted, ok := nmapCipherToStandardCipherMap[cipher]; ok {
 			gotSet[converted] = struct{}{}
 		} else {
-			// If a cipher isn't in our map, it might already be in the standard format
-			// or it's one we don't have a mapping for. We'll add it as-is.
 			gotSet[cipher] = struct{}{}
 		}
 	}
 
-	// The sets must be of equal size for an exact match.
 	if len(gotSet) != len(expectedSet) {
 		return false
 	}
 
-	// Every cipher in the 'got' set must exist in the 'expected' set.
-	// Since we already checked the lengths, this is sufficient to prove the sets are identical.
 	for cipher := range gotSet {
 		if _, ok := expectedSet[cipher]; !ok {
 			return false
 		}
 	}
+
 	return true
 }
 
