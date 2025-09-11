@@ -10,7 +10,7 @@ import (
 )
 
 var csvColumns = []string{
-	"IP", "Port", "Pod Name", "Namespace", "Component Name", "Component Maintainer",
+	"IP", "Port", "Protocol", "Service", "Pod Name", "Namespace", "Component Name", "Component Maintainer",
 	"Process", "TLS Ciphers", "TLS Version",
 	"Ingress Configured Profile", "Ingress Configured MinVersion", "Ingress MinVersion Compliance", "Ingress Configured Ciphers", "Ingress Cipher Compliance",
 	"API Configured Profile", "API Configured MinVersion", "API MinVersion Compliance", "API Configured Ciphers", "API Cipher Compliance",
@@ -99,6 +99,8 @@ func writeCSVOutput(results ScanResults, filename string) error {
 			rowData := map[string]string{
 				"IP":                            ipAddress,
 				"Port":                          port,
+				"Protocol":                      stringOrNA(portResult.Protocol),
+				"Service":                       stringOrNA(portResult.Service),
 				"Pod Name":                      ipResult.Pod.Name,
 				"Namespace":                     ipResult.Pod.Namespace,
 				"Component Name":                ipResult.OpenshiftComponent.Component,
