@@ -401,6 +401,7 @@ func (k *K8sClient) getIngressControllerTLS() (*IngressTLSProfile, error) {
 	if custom := ingress.Spec.TLSSecurityProfile.Custom; custom != nil {
 		profile.Ciphers = custom.TLSProfileSpec.Ciphers
 		profile.MinTLSVersion = string(custom.TLSProfileSpec.MinTLSVersion)
+		return profile, nil
 	}
 	if ingress.Spec.TLSSecurityProfile.Type == configv1.TLSProfileOldType {
 		profile.Ciphers = configv1.TLSProfiles[configv1.TLSProfileOldType].Ciphers
