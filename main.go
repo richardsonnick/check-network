@@ -288,9 +288,12 @@ func checkCipherCompliance(gotCiphers []string, expectedCiphers []string) bool {
 	if len(gotCiphers) == 0 && len(expectedCiphers) > 0 {
 		return false
 	}
+	// TODO nmap prints some ciphersuites to specify that an "authenticated key exchange", AKE was used
+	// We need a way to map these cipher suites to the more generic version.
+	// for example TLS_AKE_WITH_AES_128_GCM_SHA256 (nmap) -> TLS_AES_128_GCM_SHA256 (openssl)
 
 	for _, cipher := range gotCiphers {
-		convertedCipher := nmapCipherToStandardCipherMap[cipher]
+		convertedCipher := ianaCipherToOpenSSLCipherMap[cipher]
 		if _, exists := expectedSet[convertedCipher]; !exists {
 			return false
 		}
