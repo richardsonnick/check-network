@@ -237,10 +237,15 @@ fi
 
 echo "--> Executing the scan in the background inside the pod..."
 # The command is run in the background of the script, but synchronously inside the pod
-oc exec -n "$CURRENT_PROJECT" "$POD_NAME" -- /usr/local/bin/check-network -all-pods -csv /tmp/security-scan-$(date +%Y%m%d).csv -json /tmp/security-scan-$(date +%Y%m%d).json -j 12 -limit-ips 5
+oc exec -n "$CURRENT_PROJECT" "$POD_NAME" -- /usr/local/bin/check-network -all-pods -csv /tmp/security-scan-$(date +%Y%m%d).csv -json /tmp/security-scan-$(date +%Y%m%d).json -j 12 --log-file=/tmp/logs.log
 check_error "Executing scan"
 
 print_header "Step 3: Retrieving and Displaying Results"
+
+echo "--> Copying debug log from the pod..."
+oc cp "$CURRENT_PROJECT/$POD_NAME:/tmp/logs.log" ./logs.log
+check_error "Copying debug log from pod"
+
 echo "--> Copying CSV results from the pod..."
 SCAN_DATE=$(date +%Y%m%d)
 oc cp "$CURRENT_PROJECT/$POD_NAME:/tmp/security-scan-$SCAN_DATE.csv" ./security-scan-$SCAN_DATE.csv
