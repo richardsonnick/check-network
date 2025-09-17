@@ -254,6 +254,7 @@ func (k *K8sClient) getProcessMapForPod(pod PodInfo) (map[string]map[int]string,
 
 	// We only need to run this in one container, as networking is shared across the pod
 	containerName := pod.Containers[0]
+	log.Printf("Executing lsof command in pod %s/%s, container %s: %v", pod.Namespace, pod.Name, containerName, command)
 
 	req := k.clientset.CoreV1().RESTClient().Post().
 		Resource("pods").
@@ -281,8 +282,17 @@ func (k *K8sClient) getProcessMapForPod(pod PodInfo) (map[string]map[int]string,
 		Stderr: &stderr,
 	})
 
+	// Always log stdout and stderr for debugging purposes
+	log.Printf("lsof command for pod %s/%s finished.", pod.Namespace, pod.Name)
+	log.Printf("lsof stdout:\n%s", stdout.String())
+	log.Printf("lsof stderr:\n%s", stderr.String())
+
 	if err != nil {
-		return nil, fmt.Errorf("exec failed on pod %s: %v, stderr: %s", pod.Name, err, stderr.String())
+		return nil, fmt.Errorf("exec failed on pod %s: %v, stdout: %s, stderr: %s", pod.Name, err, stdout.String(), stderr.String())
+	}
+
+	if stdout.Len() == 0 {
+		log.Printf("lsof command returned empty stdout for pod %s/%s. This could be normal (no listening processes) or an issue.", pod.Namespace, pod.Name)
 	}
 
 	// Parse the lsof output
@@ -290,6 +300,7 @@ func (k *K8sClient) getProcessMapForPod(pod PodInfo) (map[string]map[int]string,
 	var currentProcess string
 	for scanner.Scan() {
 		line := scanner.Text()
+		log.Printf("Parsing lsof output line for pod %s/%s: %q", pod.Namespace, pod.Name, line)
 		if len(line) > 1 {
 			fieldType := line[0]
 			fieldValue := line[1:]
@@ -310,8 +321,13 @@ func (k *K8sClient) getProcessMapForPod(pod PodInfo) (map[string]map[int]string,
 								processMap[ip] = make(map[int]string)
 							}
 							processMap[ip][port] = currentProcess
+							log.Printf("Mapped pod %s/%s IP %s port %d to process %s", pod.Namespace, pod.Name, ip, port, currentProcess)
 						}
+					} else {
+						log.Printf("Error converting port to integer for pod %s/%s: '%s' from line '%s'", pod.Namespace, pod.Name, portStr, line)
 					}
+				} else {
+					log.Printf("Unexpected format for network address from lsof for pod %s/%s: '%s'", pod.Namespace, pod.Name, fieldValue)
 				}
 			}
 		}
