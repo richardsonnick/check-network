@@ -9,3 +9,4 @@ results.json
 small_test.txt
 *.json
 show_csv.sh
+kubconfig.yml
